@@ -102,6 +102,8 @@ JSON OUTPUT STRUCTURE:
       "data": {
         "label": "string (main title / entity name)",
         "subText": "string (optional description, technology, role, or summary)",
+        "lane": "string (optional actor/department, e.g. 'REQUESTER', 'APPROVER', 'PURCHASING')",
+        "icon": "string (optional action icon: 'pencil', 'send', 'search', 'award', 'clipboard', 'cart', 'lock', 'clock', 'check', 'x')",
         "columns": [
           {
             "name": "string (field name / method name)",
@@ -199,6 +201,19 @@ func (s *AIService) GenerateDiagram(
 			systemPrompt += "\n- MANDATORY: Design state machine/lifecycle transitions. Nodes represent states (Draft, Active, Finished) and edges represent transition events/triggers."
 		case "uml", "class":
 			systemPrompt += "\n- MANDATORY: Design UML class diagram. Use type: 'database' where columns list attributes and methods."
+		case "pipeline", "dfd":
+			systemPrompt += "\n- MANDATORY: Design data pipeline / ETL data flow. Use 'input' (data sources), 'default' (transformations/stream processing), 'database' (lake/warehouse), and 'output' (analytics/dashboards)."
+		case "mindmap", "network":
+			systemPrompt += "\n- MANDATORY: Design concept mindmap or network topology. Use 'input' (root concept or core gateway), 'decision' (major branch points or routers), 'default' (subtopics or subnet nodes), and 'output' (leaves or endpoints)."
+		case "swimlane", "bpmn":
+			systemPrompt += "\n- MANDATORY: Design a Cross-Functional Swimlane BPMN Flowchart ala Eraser.io.\n" +
+				"  1. Identify 2 to 5 primary actors/departments (e.g. 'REQUESTER', 'APPROVER', 'PURCHASING', 'SUPPLIER', 'ERP SYSTEM').\n" +
+				"  2. EVERY node MUST have 'data.lane' populated with its exact uppercase actor/department name.\n" +
+				"  3. Use 'input' for Start event, 'default' for Action Tasks, 'decision' for Gateway diamonds (e.g. 'PR Approved?'), and 'output' for End/Closed states.\n" +
+				"  4. Add 'data.icon' for each node (e.g. 'pencil', 'send', 'search', 'award', 'clipboard', 'cart', 'lock', 'clock', 'check', 'x').\n" +
+				"  5. Edges crossing between different lanes MUST have 'dashed': true. Edges within the same lane MUST have 'dashed': false.\n" +
+				"  6. Decision edges MUST have explicit condition labels like 'Yes - PR approved', 'No - returned'.\n" +
+				"  7. Order the process logically from left to right across steps."
 		}
 	}
 

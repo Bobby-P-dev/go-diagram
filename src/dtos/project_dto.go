@@ -24,6 +24,8 @@ type NodeData struct {
 	Label   string        `json:"label"`
 	SubText string        `json:"subText,omitempty"`
 	Columns []TableColumn `json:"columns,omitempty"`
+	Lane    string        `json:"lane,omitempty"`
+	Icon    string        `json:"icon,omitempty"`
 }
 
 type GraphNode struct {
@@ -37,6 +39,7 @@ type GraphEdge struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
 	Label  string `json:"label,omitempty"`
+	Dashed bool   `json:"dashed,omitempty"`
 }
 
 type GraphPayload struct {
@@ -104,4 +107,3 @@ type ChatResponseOpenAI struct {
 	} `json:"choices"`
 	Error *OpenAIError `json:"error,omitempty"`
 }
-
