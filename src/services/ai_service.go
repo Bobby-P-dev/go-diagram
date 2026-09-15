@@ -50,7 +50,7 @@ func NewAIService() *AIService {
 
 	return &AIService{
 		client: &http.Client{
-			Timeout: 90 * time.Second,
+			Timeout: 180 * time.Second,
 		},
 		provider: provider,
 		apiKey:   apiKey,
@@ -102,7 +102,7 @@ JSON OUTPUT STRUCTURE:
       "data": {
         "label": "string (main title / entity name)",
         "subText": "string (optional description, technology, role, or summary)",
-        "lane": "string (optional actor/department, e.g. 'REQUESTER', 'APPROVER', 'PURCHASING')",
+        "lane": "string (STRICT: ONLY for swimlane/bpmn diagrams. NEVER use for ERD, database, flowchart, or architecture. Leave empty "" or omit for non-swimlane)",
         "icon": "string (optional action icon: 'pencil', 'send', 'search', 'award', 'clipboard', 'cart', 'lock', 'clock', 'check', 'x')",
         "columns": [
           {
@@ -179,7 +179,6 @@ SMART INCREMENTAL EDITING RULES:
   * When user asks to DELETE: Remove the requested node and delete all edges connected to that node.
   * DO NOT wipe out or regenerate the whole diagram from scratch unless explicitly requested (e.g., "buat ulang dari awal" or "reset diagram").`
 
-
 func (s *AIService) GenerateDiagram(
 	historyMessages []entities.ChatMessage,
 	currentGraph string,
@@ -192,7 +191,8 @@ func (s *AIService) GenerateDiagram(
 		systemPrompt += fmt.Sprintf("\n\nTARGET DIAGRAM TYPE: %s", strings.ToUpper(diagramType))
 		switch strings.ToLower(diagramType) {
 		case "erd", "database":
-			systemPrompt += "\n- MANDATORY: Design relational database tables. Every entity node MUST use type: 'database' with rich 'columns' (PK, FK, constraints, types) and relational edges (1:N, 1:1, N:M)."
+			systemPrompt += "\n- MANDATORY: Design relational database tables. Every entity node MUST use type: 'database' with rich 'columns' (PK, FK, constraints, types) and relational edges (1:N, 1:1, N:M)." +
+				"\n- STRICT ERD RULE: DO NOT generate any 'lane' property. ERD diagrams MUST be pure relational table structures without swimlanes, lanes, or departmental bands. Keep 'lane' empty or omit it completely."
 		case "flowchart", "workflow":
 			systemPrompt += "\n- MANDATORY: Design a procedural step-by-step flowchart. Use 'input' (start), 'decision' (branches with Yes/No edges), 'default' (action steps), and 'output' (end/terminal)."
 		case "architecture", "system":
@@ -257,6 +257,14 @@ func (s *AIService) GenerateDiagram(
 		return nil, "", fmt.Errorf("AI returned empty nodes array")
 	}
 
+	// For non-swimlane diagrams (especially ERD/database), ensure 'lane' is stripped to prevent accidental swimlanes
+	isSwimlane := strings.ToLower(diagramType) == "swimlane" || strings.ToLower(diagramType) == "bpmn"
+	if !isSwimlane {
+		for i := range graph.Nodes {
+			graph.Nodes[i].Data.Lane = ""
+		}
+	}
+
 	chatAssistantMessage := strings.TrimSpace(graph.Message)
 	if chatAssistantMessage == "" {
 		chatAssistantMessage = fmt.Sprintf("Diagram updated with %d nodes and %d connections.", len(graph.Nodes), len(graph.Edges))
@@ -302,6 +310,7 @@ func (s *AIService) callOpenAI(
 		Model:          s.model,
 		Messages:       openAIMessages,
 		Stream:         false,
+		MaxTokens:      8192,
 		ResponseFormat: dtos.ResponseFormatOpenAI{Type: "json_object"},
 	}
 
@@ -428,7 +437,7 @@ func (s *AIService) callAnthropic(
 
 	reqBody := anthropicRequest{
 		Model:     s.model,
-		MaxTokens: 4096,
+		MaxTokens: 8192,
 		System:    systemPrompt,
 		Messages:  consolidatedMessages,
 	}
@@ -520,6 +529,17 @@ func (s *AIService) callAnthropic(
 	}
 
 	return rawText, nil
+}
+
+func (s *AIService) CallLLM(systemPrompt string, historyMessages []entities.ChatMessage, newPrompt string) (string, error) {
+	if s.provider == "openai" {
+		return s.callOpenAI(systemPrompt, historyMessages, newPrompt)
+	}
+	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+}
+
+func (s *AIService) SanitizeJSON(raw string) string {
+	return sanitizeJSONResponse(raw)
 }
 
 var codeBlockRegex = regexp.MustCompile("(?s)```(?:json)?\\s*\n?(.*?)\\s*```")

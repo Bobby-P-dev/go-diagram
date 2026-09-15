@@ -46,9 +46,9 @@ func LoadEnv() {
 		AnthropicModel:     getEnv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
 		AnthropicBaseURL:   getEnv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1/messages"),
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
-		OpenAIAPIKey:       getEnvAny([]string{"OPENAI_API_KEY", "AI_API_KEY"}, ""),
-		OpenAIMBaseURL:     getEnvAny([]string{"OPENAI_BASE_URL", "AI_BASE_URL"}, "http://localhost:20128/v1"),
-		OpenAIModel:        getEnvAny([]string{"OPENAI_MODEL", "AI_MODEL"}, "ag/gemini-3.8-flash-high"),
+		OpenAIAPIKey:       getEnvAny([]string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY"}, ""),
+		OpenAIMBaseURL:     getEnvAny([]string{"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL"}, "http://localhost:20128/v1"),
+		OpenAIModel:        getEnvAny([]string{"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL"}, "ag/gemini-3.8-flash-high"),
 	}
 
 	log.Println("Environment variables loaded successfully")

@@ -24,12 +24,45 @@ func main() {
 
 	projectModel := models.NewProjectModel(config.DB)
 	messageModel := models.NewMessageModel(config.DB)
+	versionModel := models.NewVersionModel(config.DB)
+	logModel := models.NewLogModel(config.DB)
+	templateModel := models.NewTemplateModel(config.DB)
+	uiTemplateModel := models.NewUITemplateModel(config.DB)
+
+	commentModel := models.NewCommentModel(config.DB)
+	foundationModel := models.NewFoundationModel(config.DB)
+	settingsModel := models.NewSettingsModel(config.DB)
+	exportModel := models.NewExportModel(config.DB)
+
 	aiService := services.NewAIService()
-	projectService := services.NewProjectService(aiService, projectModel, messageModel)
+	projectService := services.NewProjectService(
+		aiService,
+		projectModel,
+		messageModel,
+		versionModel,
+		logModel,
+		templateModel,
+	)
 	projectController := controllers.NewProjectController(projectService)
 
+	uiDesignService := services.NewUIDesignService(
+		projectModel,
+		messageModel,
+		versionModel,
+		uiTemplateModel,
+		aiService,
+	)
+	uiDesignController := controllers.NewUIDesignController(uiDesignService)
+
+	workspaceController := controllers.NewWorkspaceController(
+		commentModel,
+		foundationModel,
+		settingsModel,
+		exportModel,
+	)
+
 	mux := http.NewServeMux()
-	routes.RegisterRoutes(mux, projectController)
+	routes.RegisterRoutes(mux, projectController, uiDesignController, workspaceController)
 
 	var handler http.Handler = mux
 	handler = middlewares.LoggerMiddleware(handler)

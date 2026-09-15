@@ -5,10 +5,12 @@ import "encoding/json"
 type CreateProjectRequest struct {
 	Prompt      string `json:"prompt"`
 	DiagramType string `json:"diagram_type"`
+	TemplateID  string `json:"template_id,omitempty"`
 }
 
 type ChatRequest struct {
 	Prompt          string   `json:"prompt"`
+	Foundation      string   `json:"foundation,omitempty"`
 	TargetedNodeIDs []string `json:"targeted_node_ids,omitempty"`
 }
 
@@ -73,8 +75,23 @@ type ProjectSidebarItem struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	DiagramType string `json:"diagram_type"`
+	ProjectMode string `json:"project_mode,omitempty"`
+	IsPinned    bool   `json:"is_pinned"`
 	UpdatedAt   string `json:"updated_at"`
 	CreatedAt   string `json:"created_at"`
+}
+
+type PaginatedProjectsResponse struct {
+	Items      []ProjectSidebarItem `json:"items"`
+	TotalCount int                  `json:"total_count"`
+	Limit      int                  `json:"limit"`
+	Offset     int                  `json:"offset"`
+	HasMore    bool                 `json:"has_more"`
+}
+
+type TogglePinResponse struct {
+	ID       string `json:"id"`
+	IsPinned bool   `json:"is_pinned"`
 }
 
 type MessageOpenAI struct {
@@ -89,6 +106,7 @@ type ChatRequestOpenAI struct {
 	Model          string               `json:"model"`
 	Messages       []MessageOpenAI      `json:"messages"`
 	Stream         bool                 `json:"stream"`
+	MaxTokens      int                  `json:"max_tokens,omitempty"`
 	ResponseFormat ResponseFormatOpenAI `json:"response_format"`
 }
 
@@ -106,4 +124,26 @@ type ChatResponseOpenAI struct {
 		} `json:"message"`
 	} `json:"choices"`
 	Error *OpenAIError `json:"error,omitempty"`
+}
+
+
+type DiagramVersionDTO struct {
+	ID            string          `json:"id"`
+	ProjectID     string          `json:"project_id"`
+	VersionNumber int             `json:"version_number"`
+	ChangeSummary string          `json:"change_summary"`
+	Nodes         json.RawMessage `json:"nodes"`
+	Edges         json.RawMessage `json:"edges"`
+	CreatedAt     string          `json:"created_at"`
+}
+
+type TemplateDTO struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Category    string          `json:"category"`
+	Description string          `json:"description"`
+	DiagramType string          `json:"diagram_type"`
+	Nodes       json.RawMessage `json:"nodes"`
+	Edges       json.RawMessage `json:"edges"`
+	IsFeatured  bool            `json:"is_featured"`
 }
