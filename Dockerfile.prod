@@ -1,0 +1,51 @@
+# ==========================================
+# Stage 1: Build Statically Linked Go Binary
+# ==========================================
+FROM golang:alpine AS builder
+
+ENV GOTOOLCHAIN=auto \
+    CGO_ENABLED=0 \
+    GOOS=linux
+
+WORKDIR /app
+
+# Install git and certs for private or public modules
+RUN apk add --no-cache git ca-certificates
+
+# Cache dependencies
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source files (filtered by .dockerignore)
+COPY . .
+
+# Build statically linked binary with debug symbols stripped
+RUN go build -ldflags="-w -s -extldflags '-static'" -o diagram-backend ./main.go
+
+# ==========================================
+# Stage 2: Hardened Minimal Production Image
+# ==========================================
+FROM alpine:3.20
+
+# Install runtime dependencies for TLS and Healthcheck
+RUN apk add --no-cache ca-certificates tzdata curl && \
+    addgroup -g 10001 -S appgroup && \
+    adduser -u 10001 -S appuser -G appgroup
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /app/diagram-backend /app/diagram-backend
+
+# Ensure proper permissions
+RUN chown -R appuser:appgroup /app
+
+# Run as unprivileged user
+USER appuser:appgroup
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=20s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:8080/health || exit 1
+
+ENTRYPOINT ["/app/diagram-backend"]

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
@@ -16,6 +17,7 @@ type UIDesignServiceInterface interface {
 	CreateProjectFromTemplate(ctx context.Context, templateID string) (*dtos.ProjectResponse, error)
 	GenerateUIDesign(ctx context.Context, req dtos.CreateUIDesignRequest) (*dtos.ProjectResponse, error)
 	IterateUIDesignWithChat(ctx context.Context, projectID, prompt string, targetedNodeIDs []string) (*dtos.ProjectResponse, error)
+	IterateUIDesignWithTargetedChat(ctx context.Context, projectID string, req *dtos.ChatRequest) (*dtos.ProjectResponse, error)
 }
 
 type uiDesignService struct {
@@ -27,6 +29,7 @@ type uiDesignService struct {
 	compiler        *UIDesignCompiler
 	changeAnalyzer  *ChangeAnalyzer
 	patchEngine     *PatchEngine
+	targetedPatcher *TargetedPatcher
 }
 
 func NewUIDesignService(
@@ -45,6 +48,7 @@ func NewUIDesignService(
 		compiler:        NewUIDesignCompiler(aiService),
 		changeAnalyzer:  NewChangeAnalyzer(aiService),
 		patchEngine:     NewPatchEngine(),
+		targetedPatcher: NewTargetedPatcher(aiService),
 	}
 }
 
@@ -176,19 +180,8 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 	}
 
 	accentColor := strings.TrimSpace(req.AccentColor)
-	if accentColor == "" {
-		accentColor = "#6366f1"
-	}
-
 	foundation := strings.ToLower(strings.TrimSpace(req.Foundation))
-	if foundation == "" {
-		foundation = "ramp"
-	}
-
 	productContext := strings.ToLower(strings.TrimSpace(req.ProductContext))
-	if productContext == "" {
-		productContext = "saas"
-	}
 
 	prompt := strings.TrimSpace(req.Prompt)
 	if customTone := strings.TrimSpace(req.CustomTone); customTone != "" && prompt != "" {
@@ -439,9 +432,32 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 }
 
 func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID, prompt string, targetedNodeIDs []string) (*dtos.ProjectResponse, error) {
+	return s.IterateUIDesignWithTargetedChat(ctx, projectID, &dtos.ChatRequest{
+		Prompt:          prompt,
+		TargetedNodeIDs: targetedNodeIDs,
+	})
+}
+
+func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, projectID string, req *dtos.ChatRequest) (*dtos.ProjectResponse, error) {
 	project, messages, err := s.projectModel.GetByID(projectID)
 	if err != nil {
 		return nil, fmt.Errorf("project not found: %w", err)
+	}
+
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(req.Message)
+	}
+	if prompt == "" {
+		prompt = strings.TrimSpace(req.Instruction)
+	}
+
+	targetRef := req.Target
+	if targetRef == nil && req.SelectedComponentID != "" {
+		targetRef = &dtos.TargetElementRefDTO{
+			Type: "component",
+			ID:   req.SelectedComponentID,
+		}
 	}
 
 	// 1. Parse existing nodes and find current primary UI Frame
@@ -465,14 +481,25 @@ func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID
 		}
 	}
 
-	// 2. RUN CHANGE ANALYZER
-	changePlan, err := s.changeAnalyzer.AnalyzeChange(ctx, prompt, currentFrame)
+	var oldHtml string
+	if currentFrame != nil {
+		oldHtml = currentFrame.RawHtml
+		if oldHtml == "" && currentFrame.CodeExport != nil {
+			oldHtml = currentFrame.CodeExport["html"]
+		}
+		if oldHtml == "" && currentFrame.Implementation != nil {
+			oldHtml = currentFrame.Implementation.Source.HTML
+		}
+	}
+
+	// 2. RUN CHANGE ANALYZER WITH STRICT LOCALITY
+	changePlan, err := s.changeAnalyzer.AnalyzeTargetedChange(ctx, prompt, targetRef, req.SelectionContext, currentFrame)
 	if err != nil {
 		changePlan = &dtos.ChangePlanDTO{
 			Request:        prompt,
 			Classification: "style",
 			Scope:          "component",
-			Strategy:       "patch",
+			Strategy:       "component_patch",
 			Preserve:       []string{"layout", "typography", "content"},
 			Regenerate:     false,
 		}
@@ -481,18 +508,35 @@ func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID
 	var summary string
 	var updatedNodes []interface{}
 
-	// 3. DECIDE: PATCH VS REBUILD
-	if changePlan.Strategy == "patch" && currentFrame != nil {
-		// EXECUTE TARGETED PATCH
-		patchedFrame, patchExplanation, patchErr := s.patchEngine.ApplyPatch(currentFrame, changePlan)
-		if patchErr == nil {
+	// 3. DECIDE: SURGICAL TARGETED PATCH VS REBUILD
+	isLocalStrategy := changePlan.Strategy == "component_patch" ||
+		changePlan.Strategy == "section_patch" ||
+		changePlan.Strategy == "patch" ||
+		changePlan.Strategy == "token_update" ||
+		changePlan.Operation == dtos.OpComponentPatch ||
+		changePlan.Operation == dtos.OpSectionPatch
+
+	if isLocalStrategy && currentFrame != nil && targetNodeIdx >= 0 {
+		// Attempt surgical targeted patch
+		patchedFrame, patchExplanation, patchErr := s.targetedPatcher.ApplyTargetedPatch(ctx, currentFrame, changePlan)
+		if patchErr != nil || patchedFrame == nil {
+			// Fallback to legacy patch engine if targeted patcher encountered an issue
+			patchedFrame, patchExplanation, patchErr = s.patchEngine.ApplyPatch(currentFrame, changePlan)
+		}
+
+		if patchErr == nil && patchedFrame != nil {
 			patchedFrameBytes, _ := json.Marshal(patchedFrame)
 			var patchedMap map[string]interface{}
 			_ = json.Unmarshal(patchedFrameBytes, &patchedMap)
 
-			// Ensure raw_html and rawHtml are synchronized
+			// Ensure raw_html, rawHtml, and implementation.source.html are synchronized
 			if rHtml, ok := patchedMap["raw_html"].(string); ok && rHtml != "" {
 				patchedMap["rawHtml"] = rHtml
+				if implMap, ok := patchedMap["implementation"].(map[string]interface{}); ok {
+					if srcMap, ok := implMap["source"].(map[string]interface{}); ok {
+						srcMap["html"] = rHtml
+					}
+				}
 			}
 
 			// Preserve existing node position and id
@@ -503,58 +547,123 @@ func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID
 				updatedNodes = append(updatedNodes, n)
 			}
 
-			summary = fmt.Sprintf("✨ **[UPDATE] %s**\n\n%s", strings.ToUpper(changePlan.Classification), patchExplanation)
+			summary = fmt.Sprintf("✨ **[%s]** %s", strings.ToUpper(changePlan.Strategy), patchExplanation)
 		}
 	}
 
-	// If rebuild or patch didn't produce nodes, run full compiler or LLM iteration
+	// 4. FULL REBUILD ONLY IF EXPLICITLY REQUESTED
 	if len(updatedNodes) == 0 {
-		device := "web"
-		foundation := "ramp"
-		themeMode := "dark"
-		accentColor := "#6366f1"
+		if changePlan.Strategy == "rebuild" || changePlan.Regenerate || changePlan.Operation == dtos.OpFullReplace {
+			device := "web"
+			foundation := ""
+			themeMode := ""
+			accentColor := ""
 
-		if currentFrame != nil {
-			if currentFrame.Device != "" {
-				device = currentFrame.Device
+			if currentFrame != nil {
+				if currentFrame.Device != "" {
+					device = currentFrame.Device
+				}
+				if mode, ok := currentFrame.Theme["mode"].(string); ok && mode != "" {
+					themeMode = mode
+				}
+				if prim, ok := currentFrame.Theme["primary"].(string); ok && prim != "" {
+					accentColor = prim
+				}
 			}
-			if mode, ok := currentFrame.Theme["mode"].(string); ok && mode != "" {
-				themeMode = mode
-			}
-			if prim, ok := currentFrame.Theme["primary"].(string); ok && prim != "" {
-				accentColor = prim
+
+			dsl, compileErr := s.compiler.Compile(ctx, prompt, device, foundation, themeMode, accentColor)
+			if compileErr == nil && len(dsl.Frames) > 0 {
+				dsl.ChangePlan = changePlan
+				xOffset := 60.0
+				for idx, f := range dsl.Frames {
+					f.ChangePlan = changePlan
+					frameBytes, _ := json.Marshal(f)
+					var frameMap map[string]interface{}
+					_ = json.Unmarshal(frameBytes, &frameMap)
+
+					if rHtml, ok := frameMap["raw_html"].(string); ok && rHtml != "" {
+						frameMap["rawHtml"] = rHtml
+					}
+
+					flowNode := map[string]interface{}{
+						"id":       fmt.Sprintf("ui-frame-%d", idx+1),
+						"type":     "ui_frame",
+						"position": map[string]float64{"x": xOffset, "y": 60},
+						"data":     frameMap,
+					}
+					updatedNodes = append(updatedNodes, flowNode)
+					xOffset += float64(f.Width) + 80.0
+				}
+				summary = fmt.Sprintf("✨ **[REBUILD STRUKTURAL]** Desain antarmuka disusun ulang sesuai kebutuhan: %q.", prompt)
 			}
 		}
 
-		dsl, compileErr := s.compiler.Compile(ctx, prompt, device, foundation, themeMode, accentColor)
-		if compileErr == nil && len(dsl.Frames) > 0 {
-			dsl.ChangePlan = changePlan
-			xOffset := 60.0
-			for idx, f := range dsl.Frames {
-				f.ChangePlan = changePlan
-				frameBytes, _ := json.Marshal(f)
-				var frameMap map[string]interface{}
-				_ = json.Unmarshal(frameBytes, &frameMap)
-
-				if rHtml, ok := frameMap["raw_html"].(string); ok && rHtml != "" {
-					frameMap["rawHtml"] = rHtml
-				}
-
-				flowNode := map[string]interface{}{
-					"id":       fmt.Sprintf("ui-frame-%d", idx+1),
-					"type":     "ui_frame",
-					"position": map[string]float64{"x": xOffset, "y": 60},
-					"data":     frameMap,
-				}
-				updatedNodes = append(updatedNodes, flowNode)
-				xOffset += float64(f.Width) + 80.0
-			}
-			summary = fmt.Sprintf("✨ **[REBUILD STRUKTURAL]** Desain antarmuka disusun ulang sesuai kebutuhan: %q.", prompt)
-		} else {
-			// Fallback: minimal update
-			summary = "Desain antarmuka diperbarui sesuai permintaan."
+		// Safe Locality Guard: If still empty, preserve current layout completely
+		if len(updatedNodes) == 0 {
+			summary = fmt.Sprintf("⚠️ **[NO_CHANGE]** Tidak ada modifikasi yang diterapkan untuk instruksi: %q. Pastikan elemen target dipilih dengan benar.", prompt)
 			for _, n := range currentNodes {
 				updatedNodes = append(updatedNodes, n)
+			}
+		}
+	}
+
+	// Validate duplicate IDs across updated nodes
+	validator := NewDuplicateValidator()
+	for _, n := range updatedNodes {
+		if nodeMap, ok := n.(map[string]interface{}); ok {
+			if dataMap, ok := nodeMap["data"].(map[string]interface{}); ok {
+				if rHtml, ok := dataMap["raw_html"].(string); ok && rHtml != "" {
+					if dupErr := validator.ValidateHTMLDuplicateIDs(rHtml); dupErr != nil {
+						log.Printf("[VALIDATOR WARNING] %v in targeted chat result", dupErr)
+					}
+				}
+			}
+		}
+	}
+
+	log.Printf("[STATE RECONCILIATION] op=%s target=%s before_nodes=%d after_nodes=%d", changePlan.Operation, changePlan.Target.ID, len(currentNodes), len(updatedNodes))
+
+	var newHtml string
+	for _, n := range updatedNodes {
+		if nodeMap, ok := n.(map[string]interface{}); ok {
+			if dataMap, ok := nodeMap["data"].(map[string]interface{}); ok {
+				if rHtml, ok := dataMap["raw_html"].(string); ok && rHtml != "" {
+					newHtml = rHtml
+					break
+				}
+			}
+		}
+	}
+
+	latestVer, _ := s.versionModel.GetLatestVersionNumber(project.ID)
+	if latestVer <= 0 {
+		latestVer = 1
+	}
+
+	// No-Op Detector: Check if targeted edit produced identical markup
+	isNoOp := isLocalStrategy && len(currentNodes) == len(updatedNodes) && strings.TrimSpace(newHtml) != "" && strings.TrimSpace(newHtml) == strings.TrimSpace(oldHtml)
+	if isNoOp {
+		summary = fmt.Sprintf("⚠️ **[NO_CHANGE]** Tidak ada modifikasi kode yang dihasilkan untuk target `%s`. Instruksi tidak mengubah markup yang ada.", changePlan.Target.ID)
+	}
+
+	versionNum := latestVer
+	if !isNoOp {
+		versionNum = latestVer + 1
+	}
+
+	// Synchronize version and implementation into node data
+	for _, n := range updatedNodes {
+		if nodeMap, ok := n.(map[string]interface{}); ok {
+			if dataMap, ok := nodeMap["data"].(map[string]interface{}); ok {
+				dataMap["version"] = versionNum
+				if rHtml, ok := dataMap["raw_html"].(string); ok && rHtml != "" {
+					if implMap, ok := dataMap["implementation"].(map[string]interface{}); ok {
+						implMap["version"] = versionNum
+						if srcMap, ok := implMap["source"].(map[string]interface{}); ok {
+							srcMap["html"] = rHtml
+						}
+					}
+				}
 			}
 		}
 	}
@@ -562,18 +671,21 @@ func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID
 	nodesBytes, _ := json.Marshal(updatedNodes)
 	edgesBytes := project.CurrentEdges
 
-	if err := s.projectModel.UpdateGraph(project.ID, nodesBytes, edgesBytes); err != nil {
-		return nil, fmt.Errorf("failed to update graph: %w", err)
+	if !isNoOp {
+		if err := s.projectModel.UpdateGraph(project.ID, nodesBytes, edgesBytes); err != nil {
+			return nil, fmt.Errorf("failed to update graph: %w", err)
+		}
+		_, _ = s.versionModel.CreateVersion(project.ID, versionNum, summary, nodesBytes, edgesBytes, nil)
+	} else {
+		log.Printf("[NO-OP DETECTOR] Skipped creating redundant version for project %s: zero diff detected", project.ID)
 	}
-
-	// Record version
-	versionNum := len(messages)/2 + 2
-	_, _ = s.versionModel.CreateVersion(project.ID, versionNum, summary, nodesBytes, edgesBytes, nil)
 
 	// Save messages
 	var targetBytes json.RawMessage
-	if len(targetedNodeIDs) > 0 {
-		targetBytes, _ = json.Marshal(targetedNodeIDs)
+	if len(req.TargetedNodeIDs) > 0 {
+		targetBytes, _ = json.Marshal(req.TargetedNodeIDs)
+	} else if req.Target != nil {
+		targetBytes, _ = json.Marshal(req.Target)
 	}
 	msg1, _ := s.messageModel.AppendMessage(project.ID, "user", prompt, targetBytes)
 	msg2, _ := s.messageModel.AppendMessage(project.ID, "assistant", summary, nil)
@@ -591,15 +703,17 @@ func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID
 	}
 
 	return &dtos.ProjectResponse{
-		ID:           project.ID,
-		Title:        project.Title,
-		DiagramType:  project.DiagramType,
-		CurrentNodes: nodesBytes,
-		CurrentEdges: edgesBytes,
-		Nodes:        nodesBytes,
-		Edges:        edgesBytes,
-		Messages:     messageDTOs,
-		CreatedAt:    project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		UpdatedAt:    project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		ID:            project.ID,
+		Title:         project.Title,
+		DiagramType:   project.DiagramType,
+		CurrentNodes:  nodesBytes,
+		CurrentEdges:  edgesBytes,
+		Nodes:         nodesBytes,
+		Edges:         edgesBytes,
+		Messages:      messageDTOs,
+		Version:       versionNum,
+		VersionNumber: versionNum,
+		CreatedAt:     project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:     project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}, nil
 }

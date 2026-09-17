@@ -50,11 +50,12 @@ func (c *WorkspaceController) GetComments(w http.ResponseWriter, r *http.Request
 }
 
 type CreateCommentRequest struct {
-	NodeID  string  `json:"node_id"`
-	Author  string  `json:"author"`
-	Content string  `json:"content"`
-	PosX    float64 `json:"position_x"`
-	PosY    float64 `json:"position_y"`
+	NodeID   string          `json:"node_id"`
+	Author   string          `json:"author"`
+	Content  string          `json:"content"`
+	PosX     float64         `json:"position_x"`
+	PosY     float64         `json:"position_y"`
+	Metadata json.RawMessage `json:"metadata,omitempty"`
 }
 
 func (c *WorkspaceController) CreateComment(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +81,7 @@ func (c *WorkspaceController) CreateComment(w http.ResponseWriter, r *http.Reque
 		req.Author = "Designer"
 	}
 
-	comment, err := c.commentModel.Create(projectID, req.NodeID, req.Author, req.Content, req.PosX, req.PosY)
+	comment, err := c.commentModel.Create(projectID, req.NodeID, req.Author, req.Content, req.PosX, req.PosY, req.Metadata)
 	if err != nil {
 		log.Printf("[WorkspaceController.CreateComment] Error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to create comment", err.Error())

@@ -22,6 +22,9 @@ func main() {
 	config.ConnectDatabase()
 	defer config.CloseDatabase()
 
+	config.ConnectRedis()
+	defer config.CloseRedis()
+
 	projectModel := models.NewProjectModel(config.DB)
 	messageModel := models.NewMessageModel(config.DB)
 	versionModel := models.NewVersionModel(config.DB)
@@ -61,8 +64,16 @@ func main() {
 		exportModel,
 	)
 
+	jobDispatcherService := services.NewJobDispatcherService(
+		projectModel,
+		messageModel,
+		versionModel,
+		logModel,
+	)
+	asyncJobController := controllers.NewAsyncJobController(jobDispatcherService, projectService)
+
 	mux := http.NewServeMux()
-	routes.RegisterRoutes(mux, projectController, uiDesignController, workspaceController)
+	routes.RegisterRoutes(mux, projectController, uiDesignController, workspaceController, asyncJobController)
 
 	var handler http.Handler = mux
 	handler = middlewares.LoggerMiddleware(handler)
@@ -71,9 +82,9 @@ func main() {
 	server := &http.Server{
 		Addr:         ":" + config.Env.AppPort,
 		Handler:      handler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 90 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 300 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {

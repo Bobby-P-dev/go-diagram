@@ -40,16 +40,19 @@ Instead: "Google login is a common optional pattern. The user did not request it
 RULE 3: OPTIONAL != REQUIRED.
 Optional features MUST NEVER be placed in 'explicit' or 'implied'. They belong ONLY in 'optional'.
 
-RULE 4: Separate visual style from product function:
+RULE 4: Separate visual style from product function and page composition:
 - "modern" is a visual direction, NOT SaaS or startup or dashboard.
-- "elegan" is a visual treatment, NOT a luxury brand or corporate suite.
-- "minimal" / "minimalis" means reduced visual noise and simple complexity.
+- "elegan" is an aesthetic treatment (refined typography, generous whitespace, understated luxury), NOT a corporate suite.
+- "minimal" / "minimalis" is an aesthetic visual treatment (clean typography, generous whitespace, subtle borders, uncluttered layout), NOT a command to delete or prune page sections. A minimal landing page still has full storytelling and 4-8 rich sections.
 
 RULE 5: Never invent business functionality (no treasury, no OCR, no virtual cards, no trading, no workflows).
 RULE 6: Never invent statistics, metrics, or revenue.
-RULE 7: Never invent company names or fictitious brands.
-RULE 8: "simple" / "sederhana" / "minimalis" strictly means LOW COMPLEXITY (complexity: "simple", design_freedom.visual: "low").
-RULE 9: "creative" / "experimental" gives visual freedom (design_freedom.visual: "high"), but NEVER authorizes inventing product features (functional freedom remains "low").
+RULE 7: Never invent company names or fictitious brands. If a URL or brand is mentioned in prompt (e.g. "https://annsbakehouse.com/"), extract and respect that brand and domain!
+RULE 8: 3-AXIS FREEDOM MODEL:
+- functional_freedom is "low": do NOT invent extra business workflows.
+- visual_freedom is "high": explore typography, contrast, spacing, color palette.
+- composition_freedom is "high": orchestrate rich section pacing (hero, product discovery, brand story, testimonials, footer).
+RULE 9: "creative" / "experimental" gives visual freedom (design_freedom.visual: "high"), but NEVER authorizes inventing unrequested business workflows (functional freedom remains "low").
 RULE 10: For unknown products, use neutral content ("Masuk ke akun Anda", NOT "Kelola seluruh workflow visual Anda").
 RULE 11: When information is missing, preserve the uncertainty (keep fields null or empty).
 RULE 12: PAGE TYPE STRUCTURAL BOUNDS:
@@ -57,9 +60,9 @@ RULE 12: PAGE TYPE STRUCTURAL BOUNDS:
   * Explicit: Only what user said (e.g. "login page", "minimalis", "elegan").
   * Implied: ONLY credential input (email/username), password input, and submit action.
   * Optional: Google login, GitHub login, remember me, forgot password, registration. DO NOT make these implied!
-- HOMEPAGE:
-  * Implied: navigation or header, headline, primary intro action.
-  * Optional: dashboard, pricing, testimonials, financial feed, company logos.
+- HOMEPAGE / LANDING:
+  * Implied: navigation or header, hero section with visual anchor, primary intro action.
+  * Composition elements: product showcase/grid, brand ethos, customer reviews, conversion banner, footer.
 
 OUTPUT JSON SCHEMA:
 {
@@ -67,11 +70,11 @@ OUTPUT JSON SCHEMA:
   "page": {
     "type": "string (homepage | landing | dashboard | login | checkout | detail | profile | form | generic)",
     "purpose": "string (concise summary of core user purpose)",
-    "complexity": "string (simple | moderate | complex)"
+    "complexity": "string (moderate | complex | simple)"
   },
   "context": {
-    "domain": null, // string or null. MUST be null if user did not explicitly state a domain!
-    "target_user": null // string or null. MUST be null if user did not state a persona!
+    "domain": null, // string or null. Extracted from prompt or URL, else null.
+    "target_user": null // string or null.
   },
   "goals": {
     "primary": "string (the single main objective)",
@@ -84,9 +87,10 @@ OUTPUT JSON SCHEMA:
   },
   "design_freedom": {
     "functional": "low", // always "low" unless user explicitly requested complex multi-workflow
-    "visual": "low | medium | high" // "low" for minimal/simple, "high" for creative/bold, "medium" otherwise
+    "visual": "high", // "high" for refined aesthetic exploration
+    "composition": "high" // "high" for rich storytelling layout
   },
-  "constraints": [], // array of constraints (e.g. "no unrequested social login", "low visual noise")
+  "constraints": [], // array of constraints
   "visual_preferences": [], // array of strings
   "responsive": true
 }

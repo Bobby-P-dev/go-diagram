@@ -11,6 +11,7 @@ func RegisterRoutes(
 	projectCtrl *controllers.ProjectController,
 	uiDesignCtrl *controllers.UIDesignController,
 	workspaceCtrl *controllers.WorkspaceController,
+	asyncJobCtrl *controllers.AsyncJobController,
 ) {
 	// Diagram Routes
 	mux.HandleFunc("POST /api/projects", projectCtrl.Create)
@@ -27,6 +28,13 @@ func RegisterRoutes(
 	mux.HandleFunc("POST /api/ui-design/generate", uiDesignCtrl.Create)
 	mux.HandleFunc("POST /api/ui-design/projects/{id}/chat", uiDesignCtrl.Chat)
 
+	// CrewAI Asynchronous Orchestration Routes
+	if asyncJobCtrl != nil {
+		mux.HandleFunc("POST /api/ui-design/generate/async", asyncJobCtrl.CreateAsyncUIDesign)
+		mux.HandleFunc("GET /api/jobs/{id}", asyncJobCtrl.GetJobStatus)
+		mux.HandleFunc("POST /internal/v1/jobs/callback", asyncJobCtrl.HandleJobCallback)
+	}
+
 	// Workspace Enhancements Routes (Comments, Foundations, Settings, Exports)
 	mux.HandleFunc("GET /api/projects/{id}/comments", workspaceCtrl.GetComments)
 	mux.HandleFunc("POST /api/projects/{id}/comments", workspaceCtrl.CreateComment)
@@ -37,4 +45,11 @@ func RegisterRoutes(
 	mux.HandleFunc("GET /api/settings", workspaceCtrl.GetSettings)
 	mux.HandleFunc("PUT /api/settings", workspaceCtrl.UpdateSettings)
 	mux.HandleFunc("GET /api/projects/{id}/exports", workspaceCtrl.GetExports)
+
+	// Production & Container Health Check
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"healthy","service":"diagram-backend"}`))
+	})
 }

@@ -46,34 +46,37 @@ CRITICAL ARCHITECTURE RULES:
      * "show_forgot_password": false (unless in requirements.explicit).
      * "switch_action": "" (empty unless registration was explicitly requested).
      * "subtitle": Neutral copy ("Masuk ke akun Anda" or "Silakan masukkan kredensial Anda"). NEVER assume product domain.
-   - For HOMEPAGE:
-     * Standard sections: "navbar" + "hero" + "feature_grid".
-     * DO NOT add "kpi_grid", financial metrics, pricing tables, testimonials, or dashboards unless explicitly requested.
+   - For HOMEPAGE / LANDING:
+     * Standard composition: "navbar" + "hero" (split with visual anchor) + "product_grid" (or "feature_grid") + "spotlight" (or brand story) + "testimonials" + "footer".
+     * Compose 4 to 8 rich sections to create a complete, balanced user journey. NEVER output only 1 or 2 bare sections!
 
 4. DESIGN FREEDOM ADHERENCE:
-   - If design_freedom.visual is "low" (simple/minimal): Use restrained, clean spacing, minimum necessary sections (2-3), no visual clutter.
-   - If design_freedom.visual is "high" (creative/experimental): Use bold typography and creative card arrangements, but KEEP FUNCTIONAL SCOPE STRICTLY CONSERVATIVE.
+   - High visual freedom allows expressive typography, sophisticated color contrast, and rich media cards.
+   - High composition freedom allows editorial pacing, split heroes, and rich product showcases.
 
 5. COMPLEXITY DISCIPLINE:
-   - "simple": 2 to 3 sections maximum. Low visual density, zero unnecessary decorative blocks.
-   - "moderate": 3 to 4 sections with moderate interactivity.
-   - "complex": Only if explicitly required by multi-workflow domain.
+   - "simple": 3 to 4 sections with clean, calm spacing.
+   - "moderate": 4 to 7 sections with balanced storytelling and interactive cards.
+   - "complex": 6 to 10 sections for multi-feature or enterprise layouts.
 
 6. REQUIREMENT TRACEABILITY:
-   Every section MUST have a valid "requirement_source" linking directly to a requirement:
-   e.g. "requirement_source": "primary_goal", "requirement_source": "implied:credential_auth", "requirement_source": "explicit:xxx".
+   Every section MUST have a valid "requirement_source" linking directly to a requirement or composition need:
+   e.g. "requirement_source": "primary_goal", "requirement_source": "composition:brand_story", "requirement_source": "explicit:xxx".
    If a section has no source, DO NOT INCLUDE IT.
 
 7. COMPONENT REGISTRY:
    Valid section types:
    - "navbar": header navigation with brand, links, and action button.
-   - "hero": headline, subtitle, primary/secondary action buttons.
+   - "hero": headline, subtitle, primary/secondary action buttons with visual media.
    - "feature_grid": 2-4 value propositions with icons and descriptions.
+   - "product_grid": catalog items with real pricing, badges, and image links.
+   - "spotlight": editorial brand craft, highlight, or product deep-dive.
+   - "testimonials": customer reviews with ratings and quotes.
    - "data_table": structured data records with columns and rows.
    - "form": login or input form with fields and submit button.
-   - "kpi_grid": metric summary cards (only if explicitly requested for dashboard!).
-   - "product_grid": catalog items with pricing.
-   - "pricing_table": subscription plans (only if explicitly requested).
+   - "kpi_grid": metric summary cards (for dashboards).
+   - "pricing_table": subscription plans.
+   - "footer": links, copyright, contact info.
 
 OUTPUT JSON SCHEMA:
 {

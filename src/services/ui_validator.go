@@ -254,27 +254,13 @@ func (v *UIValidator) ValidateAndAudit(
 		repairedSections = append(repairedSections, sec)
 	}
 
-	// 4. Complexity Guard: If user asked for simple, bound section count to maximum 3-4 essential sections
+	// 4. Section Count Sanity Guard: Prevent runaway duplicates while allowing rich storytelling compositions (up to 12 sections)
 	if isSimpleComplexity && len(repairedSections) > 4 {
-		boundedSections := make([]dtos.UISectionDTO, 0, 4)
-		for _, sec := range repairedSections {
-			if strings.ToLower(sec.Priority) == "high" || strings.ToLower(sec.Priority) == "medium" || len(boundedSections) < 2 {
-				boundedSections = append(boundedSections, sec)
-			} else {
-				issues = append(issues, "Pruned non-essential section '"+sec.ID+"' to respect 'simple' complexity requirement")
-				strippedSections = append(strippedSections, sec.ID+": pruned for simplicity")
-				structuredIssues = append(structuredIssues, dtos.ValidationIssueDTO{
-					Type:      "complexity_drift",
-					Component: sec.ID,
-					Action:    "prune",
-					Reason:    "complexity is simple; superfluous section pruned",
-				})
-			}
-			if len(boundedSections) >= 4 {
-				break
-			}
-		}
-		repairedSections = boundedSections
+		repairedSections = repairedSections[:4]
+		issues = append(issues, "Bounded simple page complexity to max 4 sections")
+	} else if len(repairedSections) > 12 {
+		repairedSections = repairedSections[:12]
+		issues = append(issues, "Bounded section count to 12 sections to ensure optimal visual rhythm and load performance")
 	}
 
 	// Ensure at least one valid section exists

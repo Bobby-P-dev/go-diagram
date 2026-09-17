@@ -166,8 +166,9 @@ type RequirementSpecificationDTO struct {
 }
 
 type DesignFreedomDTO struct {
-	Functional string `json:"functional"` // "low", "medium"
-	Visual     string `json:"visual"`     // "low", "medium", "high"
+	Functional  string `json:"functional"`  // "low", "medium"
+	Visual      string `json:"visual"`      // "low", "medium", "high"
+	Composition string `json:"composition"` // "low", "medium", "high"
 }
 
 type RequirementPageDTO struct {
@@ -278,22 +279,39 @@ type ChangeDetailDTO struct {
 }
 
 type TargetElementDTO struct {
+	Type        string `json:"type,omitempty"`        // "component", "section", "page"
 	Component   string `json:"component,omitempty"`
 	ComponentID string `json:"component_id,omitempty"` // Stable ID e.g. "cmp-login-button"
 	Section     string `json:"section,omitempty"`
 	SectionID   string `json:"section_id,omitempty"`   // Stable ID e.g. "sec-auth-form"
 	Property    string `json:"property,omitempty"`
+	ID          string `json:"id,omitempty"`           // Canonical ID matching target
 }
 
+type OperationType string
+
+const (
+	OpFullReplace     OperationType = "FULL_REPLACE"
+	OpSectionReplace  OperationType = "SECTION_REPLACE"
+	OpSectionPatch    OperationType = "SECTION_PATCH"
+	OpComponentPatch  OperationType = "COMPONENT_PATCH"
+	OpInsertSection   OperationType = "INSERT_SECTION"
+	OpDeleteSection   OperationType = "DELETE_SECTION"
+	OpReorderSections OperationType = "REORDER_SECTIONS"
+)
+
 type ChangePlanDTO struct {
-	Request        string            `json:"request"`
-	Classification string            `json:"classification"` // "content" | "style" | "layout" | "component" | "functionality" | "structural" | "global_style" | "page_rebuild"
-	Target         TargetElementDTO  `json:"target"`
-	Changes        []ChangeDetailDTO `json:"changes"`
-	Scope          string            `json:"scope"`    // "property" | "component" | "section" | "page" | "global"
-	Strategy       string            `json:"strategy"` // "patch" | "rebuild" | "token_update"
-	Preserve       []string          `json:"preserve"` // Elements explicitly preserved
-	Regenerate     bool              `json:"regenerate"`
+	Request               string            `json:"request"`
+	Classification        string            `json:"classification"` // "content" | "style" | "layout" | "component" | "functionality" | "structural" | "global_style" | "page_rebuild"
+	Operation             OperationType     `json:"operation,omitempty"` // "FULL_REPLACE" | "SECTION_REPLACE" | "SECTION_PATCH" | "COMPONENT_PATCH" | "INSERT_SECTION" | "DELETE_SECTION" | "REORDER_SECTIONS"
+	Target                TargetElementDTO  `json:"target"`
+	Changes               []ChangeDetailDTO `json:"changes"`
+	RequestedChanges      []string          `json:"requested_changes,omitempty"`
+	Scope                 string            `json:"scope"`                  // "property" | "component" | "section" | "page" | "global"
+	Strategy              string            `json:"strategy"`               // "component_patch" | "section_patch" | "token_update" | "rebuild" | "patch"
+	Preserve              []string          `json:"preserve"`               // Elements explicitly preserved
+	PreserveOutsideTarget bool              `json:"preserve_outside_target"` // Strict Locality Guard
+	Regenerate            bool              `json:"regenerate"`
 }
 
 type UIDesignDSL struct {
@@ -436,4 +454,63 @@ type UIDesignTemplateDTO struct {
 	Sections    json.RawMessage `json:"sections"`
 	CodeExport  json.RawMessage `json:"code_export"`
 	IsFeatured  bool            `json:"is_featured"`
+}
+
+type CreativeDirectionItemDTO struct {
+	ID                    string `json:"id"`
+	Title                 string `json:"title"`
+	Concept               string `json:"concept"`
+	VisualPersonality     string `json:"visual_personality"`
+	CompositionPhilosophy string `json:"composition_philosophy"`
+	HeroStrategy          string `json:"hero_strategy"`
+	ProductPresentation   string `json:"product_presentation"`
+	TypographyApproach    string `json:"typography_approach"`
+	ColorStrategy         string `json:"color_strategy"`
+	MediaStrategy         string `json:"media_strategy"`
+	SpacingDensity        string `json:"spacing_density"`
+	InteractionCharacter  string `json:"interaction_character"`
+}
+
+type DesignDirectorChoiceDTO struct {
+	SelectedDirectionID string `json:"selected_direction_id"`
+	SelectionRationale  string `json:"selection_rationale"`
+	CompositionMandate  string `json:"composition_mandate"`
+	MediaMandate        string `json:"media_mandate"`
+	OriginalityNotes    string `json:"originality_notes"`
+}
+
+type MediaItemStrategyDTO struct {
+	SectionID       string `json:"section_id"`
+	MediaType       string `json:"media_type"`
+	AspectRatio     string `json:"aspect_ratio"`
+	Placement       string `json:"placement"`
+	VisualTreatment string `json:"visual_treatment"`
+	QueryHint       string `json:"query_hint"`
+	SampleImageURL  string `json:"sample_image_url,omitempty"`
+}
+
+type MediaStrategyDTO struct {
+	ArtDirection string                 `json:"art_direction"`
+	Items        []MediaItemStrategyDTO `json:"items"`
+}
+
+type VisualIssueDTO struct {
+	Target       string `json:"target"`
+	Type         string `json:"type"`
+	Severity     string `json:"severity"`
+	Problem      string `json:"problem"`
+	FixDirection string `json:"fix_direction"`
+}
+
+type VisualCritiqueDTO struct {
+	Status                 string           `json:"status"`
+	CompositionScore       float64          `json:"composition_score"`
+	VisualHierarchyScore   float64          `json:"visual_hierarchy_score"`
+	WhitespaceBalanceScore float64          `json:"whitespace_balance_score"`
+	DistinctivenessScore   float64          `json:"distinctiveness_score"`
+	OverallVisualScore     float64          `json:"overall_visual_score"`
+	HasExcessiveEmptySpace bool             `json:"has_excessive_empty_space"`
+	HasGenericTemplateFeel bool             `json:"has_generic_template_feel"`
+	CritiqueSummary        string           `json:"critique_summary"`
+	Issues                 []VisualIssueDTO `json:"issues"`
 }

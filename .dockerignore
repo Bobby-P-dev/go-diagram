@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.log
+diagram-backend
+tmp/
+ai-orchestration/
+.agents/
+.vscode/
+.idea/

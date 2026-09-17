@@ -78,8 +78,246 @@ func (a *ChangeAnalyzer) AnalyzeChange(
 	rawRequest string,
 	currentFrame *dtos.UIFrameData,
 ) (*dtos.ChangePlanDTO, error) {
+	return a.AnalyzeTargetedChange(ctx, rawRequest, nil, nil, currentFrame)
+}
+
+func (a *ChangeAnalyzer) AnalyzeTargetedChange(
+	ctx context.Context,
+	rawRequest string,
+	targetRef *dtos.TargetElementRefDTO,
+	selectionCtx *dtos.SelectionContextDTO,
+	currentFrame *dtos.UIFrameData,
+) (*dtos.ChangePlanDTO, error) {
 	trimmed := strings.TrimSpace(rawRequest)
 	lower := strings.ToLower(trimmed)
+
+	// STRICT LOCALITY RULE 0: Explicit Section Insert / Delete / Reorder
+	if strings.Contains(lower, "tambah") || strings.Contains(lower, "add section") || strings.Contains(lower, "insert section") {
+		targetSec := ""
+		if strings.Contains(lower, "setelah") {
+			parts := strings.Split(lower, "setelah")
+			if len(parts) > 1 {
+				targetSec = strings.TrimSpace(parts[1])
+			}
+		} else if strings.Contains(lower, "after") {
+			parts := strings.Split(lower, "after")
+			if len(parts) > 1 {
+				targetSec = strings.TrimSpace(parts[1])
+			}
+		}
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Operation:      dtos.OpInsertSection,
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				SectionID: targetSec,
+			},
+			RequestedChanges:      []string{trimmed},
+			Scope:                 "section",
+			Strategy:              "insert_section",
+			Preserve:              []string{"all existing sections"},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	if strings.Contains(lower, "hapus section") || strings.Contains(lower, "hapus seksi") || strings.Contains(lower, "delete section") || strings.Contains(lower, "remove section") {
+		delTarget := ""
+		if targetRef != nil && targetRef.ID != "" {
+			delTarget = targetRef.ID
+		} else {
+			for _, kw := range []string{"testimonial", "review", "spotlight", "product", "hero", "footer"} {
+				if strings.Contains(lower, kw) {
+					delTarget = "sec-" + kw
+					break
+				}
+			}
+		}
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Operation:      dtos.OpDeleteSection,
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				ID:        delTarget,
+				SectionID: delTarget,
+			},
+			RequestedChanges:      []string{trimmed},
+			Scope:                 "section",
+			Strategy:              "delete_section",
+			Preserve:              []string{"all other sections"},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	// STRICT LOCALITY RULE 1: User explicitly selected a component
+	if targetRef != nil && (targetRef.Type == "component" || strings.HasPrefix(targetRef.ID, "cmp-")) {
+		secID := targetRef.SectionID
+		if secID == "" {
+			secID = "sec-header"
+		}
+		classif := "style"
+		if strings.Contains(lower, "teks") || strings.Contains(lower, "text") || strings.Contains(lower, "label") || strings.Contains(lower, "judul") || strings.Contains(lower, "kata") {
+			classif = "content"
+		} else if strings.Contains(lower, "kanan") || strings.Contains(lower, "kiri") || strings.Contains(lower, "tengah") || strings.Contains(lower, "posisi") {
+			classif = "layout"
+		}
+
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: classif,
+			Operation:      dtos.OpComponentPatch,
+			Target: dtos.TargetElementDTO{
+				Type:        "component",
+				ID:          targetRef.ID,
+				ComponentID: targetRef.ID,
+				SectionID:   secID,
+			},
+			RequestedChanges: []string{trimmed},
+			Scope:            "component",
+			Strategy:         "component_patch",
+			Preserve: []string{
+				"header layout",
+				"logo",
+				"navigation",
+				"hero",
+				"product sections",
+				"page theme",
+			},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	// STRICT LOCALITY RULE 2: User explicitly selected a section
+	if targetRef != nil && (targetRef.Type == "section" || strings.HasPrefix(targetRef.ID, "sec-")) {
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Operation:      dtos.OpSectionPatch,
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				ID:        targetRef.ID,
+				SectionID: targetRef.ID,
+			},
+			RequestedChanges: []string{trimmed},
+			Scope:            "section",
+			Strategy:         "section_patch",
+			Preserve: []string{
+				"all sections outside target",
+				"hero",
+				"product sections",
+				"footer",
+				"page theme",
+				"typography outside target",
+			},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	// STRICT LOCALITY RULE 3: Implicit section targeting from prompt keywords (when target is unspecified)
+	if strings.Contains(lower, "header") || strings.Contains(lower, "navbar") || strings.Contains(lower, "nav") {
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				ID:        "sec-header",
+				SectionID: "sec-header",
+			},
+			RequestedChanges: []string{trimmed},
+			Scope:            "section",
+			Strategy:         "section_patch",
+			Preserve: []string{
+				"all sections outside header",
+				"hero",
+				"products",
+				"story",
+				"testimonials",
+				"footer",
+				"page theme",
+			},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	if strings.Contains(lower, "hero") {
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				ID:        "sec-hero",
+				SectionID: "sec-hero",
+			},
+			RequestedChanges: []string{trimmed},
+			Scope:            "section",
+			Strategy:         "section_patch",
+			Preserve: []string{
+				"header",
+				"products",
+				"story",
+				"testimonials",
+				"footer",
+				"page theme",
+			},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	if strings.Contains(lower, "produk") || strings.Contains(lower, "product") || strings.Contains(lower, "menu") || strings.Contains(lower, "katalog") {
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				ID:        "sec-products",
+				SectionID: "sec-products",
+			},
+			RequestedChanges: []string{trimmed},
+			Scope:            "section",
+			Strategy:         "section_patch",
+			Preserve: []string{
+				"header",
+				"hero",
+				"story",
+				"testimonials",
+				"footer",
+				"page theme",
+			},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	if strings.Contains(lower, "footer") {
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				ID:        "sec-footer",
+				SectionID: "sec-footer",
+			},
+			RequestedChanges: []string{trimmed},
+			Scope:            "section",
+			Strategy:         "section_patch",
+			Preserve: []string{
+				"all sections above footer",
+				"header",
+				"hero",
+				"products",
+				"page theme",
+			},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
 
 	// 1. DETERMINISTIC FAST-PATH GUARDRAILS (High confidence matching for precision & speed)
 	// Full Creative Freedom / Freeform Redesign (Zero locked elements):
@@ -336,5 +574,44 @@ Analyze this change and return a strict JSON Change Plan adhering to Change Loca
 	}
 
 	plan.Request = trimmed
+	ensureOperationType(&plan)
 	return &plan, nil
+}
+
+func ensureOperationType(plan *dtos.ChangePlanDTO) {
+	if plan == nil {
+		return
+	}
+	if plan.Operation != "" {
+		return
+	}
+	lowerReq := strings.ToLower(plan.Request)
+	if strings.Contains(lowerReq, "tambah") || strings.Contains(lowerReq, "add section") || strings.Contains(lowerReq, "insert") {
+		plan.Operation = dtos.OpInsertSection
+		plan.Strategy = "insert_section"
+		return
+	}
+	if strings.Contains(lowerReq, "hapus section") || strings.Contains(lowerReq, "delete section") || strings.Contains(lowerReq, "buang section") {
+		plan.Operation = dtos.OpDeleteSection
+		plan.Strategy = "delete_section"
+		return
+	}
+	if strings.Contains(lowerReq, "pindahkan") || strings.Contains(lowerReq, "reorder") || strings.Contains(lowerReq, "tukar urutan") {
+		plan.Operation = dtos.OpReorderSections
+		plan.Strategy = "reorder_sections"
+		return
+	}
+	if plan.Regenerate || plan.Strategy == "rebuild" || plan.Classification == "page_rebuild" || plan.Scope == "page" {
+		plan.Operation = dtos.OpFullReplace
+		return
+	}
+	if plan.Strategy == "component_patch" || plan.Scope == "component" || plan.Target.Type == "component" {
+		plan.Operation = dtos.OpComponentPatch
+		return
+	}
+	if plan.Strategy == "section_replace" {
+		plan.Operation = dtos.OpSectionReplace
+		return
+	}
+	plan.Operation = dtos.OpSectionPatch
 }

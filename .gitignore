@@ -5,6 +5,7 @@
 
 # Compiled binaries and executables
 server
+diagram-backend
 *.exe
 *.exe~
 *.dll
@@ -41,3 +42,30 @@ Thumbs.db
 # Temporary and build files
 tmp/
 .air/
+
+# Python, Virtual Environments and Cache
+.venv/
+*/.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.installed.cfg
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Sidecar local caches & storage
+ai-orchestration/.venv/
+ai-orchestration/.data/
+ai-orchestration/.config/
+ai-orchestration/.local/
+ai-orchestration/.cache/
+go-diagram.git
+*.db
+*.sqlite
+*.sqlite3
+

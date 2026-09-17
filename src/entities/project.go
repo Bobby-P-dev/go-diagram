@@ -81,10 +81,11 @@ type DesignComment struct {
 	Author    string    `json:"author"`
 	Content   string    `json:"content"`
 	Status    string    `json:"status"`
-	PosX      float64   `json:"position_x"`
-	PosY      float64   `json:"position_y"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	PosX      float64         `json:"position_x"`
+	PosY      float64         `json:"position_y"`
+	Metadata  json.RawMessage `json:"metadata,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
 }
 
 type DesignFoundation struct {

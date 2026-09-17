@@ -62,7 +62,11 @@ func (c *UIDesignController) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	result, err := c.service.IterateUIDesignWithChat(r.Context(), id, req.Prompt, req.TargetedNodeIDs)
+	if req.Prompt == "" && req.Instruction != "" {
+		req.Prompt = req.Instruction
+	}
+
+	result, err := c.service.IterateUIDesignWithTargetedChat(r.Context(), id, &req)
 	if err != nil {
 		log.Printf("[UIDesignController.Chat] Service error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to update UI design", err.Error())

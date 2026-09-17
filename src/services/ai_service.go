@@ -231,7 +231,7 @@ func (s *AIService) GenerateDiagram(
 	var err error
 
 	if s.provider == "openai" {
-		rawText, err = s.callOpenAI(systemPrompt, historyMessages, newPrompt)
+		rawText, err = s.callOpenAI(systemPrompt, historyMessages, newPrompt, &dtos.ResponseFormatOpenAI{Type: "json_object"})
 	} else {
 		rawText, err = s.callAnthropic(systemPrompt, historyMessages, newPrompt)
 	}
@@ -280,6 +280,7 @@ func (s *AIService) callOpenAI(
 	systemPrompt string,
 	historyMessages []entities.ChatMessage,
 	newPrompt string,
+	responseFormat *dtos.ResponseFormatOpenAI,
 ) (string, error) {
 	// Di OpenAI, System Prompt dimasukkan sebagai message pertama dengan role "system"
 	var openAIMessages []dtos.MessageOpenAI
@@ -311,7 +312,7 @@ func (s *AIService) callOpenAI(
 		Messages:       openAIMessages,
 		Stream:         false,
 		MaxTokens:      8192,
-		ResponseFormat: dtos.ResponseFormatOpenAI{Type: "json_object"},
+		ResponseFormat: responseFormat,
 	}
 
 	bodyBytes, err := json.Marshal(reqBody)
@@ -533,7 +534,14 @@ func (s *AIService) callAnthropic(
 
 func (s *AIService) CallLLM(systemPrompt string, historyMessages []entities.ChatMessage, newPrompt string) (string, error) {
 	if s.provider == "openai" {
-		return s.callOpenAI(systemPrompt, historyMessages, newPrompt)
+		return s.callOpenAI(systemPrompt, historyMessages, newPrompt, &dtos.ResponseFormatOpenAI{Type: "json_object"})
+	}
+	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+}
+
+func (s *AIService) CallLLMText(systemPrompt string, historyMessages []entities.ChatMessage, newPrompt string) (string, error) {
+	if s.provider == "openai" {
+		return s.callOpenAI(systemPrompt, historyMessages, newPrompt, nil)
 	}
 	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
 }
