@@ -1,5 +1,12 @@
 services:
   frontend:
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
     build:
       context: ${FRONTEND_PATH:-../vue-diagram}
       dockerfile: Dockerfile.prod
