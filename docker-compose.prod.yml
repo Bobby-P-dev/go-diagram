@@ -1,133 +1,136 @@
 services:
-  # =================================================================
-  # 1. Frontend Web & Nginx Reverse Proxy (Port 80 / 443)
-  # =================================================================
   frontend:
     build:
       context: ../frontend-diagram
       dockerfile: Dockerfile.prod
       args:
         VITE_API_BASE_URL: ${VITE_API_BASE_URL:-https://diagram.bby-dev.tech/api}
+
     container_name: diagram_frontend_prod
-    ports:
-      - "${FRONTEND_PORT:-3000}:80"
+
+    expose:
+      - "80"
+
     restart: always
+
     depends_on:
       backend:
         condition: service_healthy
+
     networks:
       - app-net
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "3"
+      - ai-network
 
-  # =================================================================
-  # 2. Go Backend Core API Microservice
-  # =================================================================
+
   backend:
     build:
       context: .
       dockerfile: Dockerfile.prod
+
     container_name: diagram_backend_prod
+
     environment:
       - APP_PORT=8080
-      # External Managed PostgreSQL
-      - DB_HOST=${DB_HOST:?DB_HOST environment variable required}
+
+      - DB_HOST=${DB_HOST}
       - DB_PORT=${DB_PORT:-5432}
-      - DB_USER=${DB_USER:?DB_USER environment variable required}
-      - DB_PASSWORD=${DB_PASSWORD:?DB_PASSWORD environment variable required}
-      - DB_NAME=${DB_NAME:?DB_NAME environment variable required}
-      - DB_SSLMODE=${DB_SSLMODE:-require}
-      # External Managed Redis
-      - REDIS_URL=${REDIS_URL:?REDIS_URL environment variable required}
-      # Internal Gateway Communication
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY environment variable required}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - DB_SSLMODE=${DB_SSLMODE:-disable}
+
+      - REDIS_URL=${REDIS_URL}
+
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
       - ORCHESTRATION_SERVICE_URL=http://ai-orchestration:8000
-      # AI Model Configuration
+
       - AI_PROVIDER=${AI_PROVIDER:-openai}
-      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY:?OPEN_AI_API_KEY environment variable required}
+      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
       - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
-      - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-https://9router.bby-dev.tech/v1}
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://rancanglab.bby-dev.tech,http://rancanglab.bby-dev.tech,https://diagram.bby-dev.tech,http://diagram.bby-dev.tech}
-    ports:
-      - "${BACKEND_PORT:-8080}:8080"
+      - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
+
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+
+    expose:
+      - "8080"
+
     restart: always
+
     networks:
       - app-net
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+      - ai-network
 
-  # =================================================================
-  # 3. Python AI Orchestration Gateway (FastAPI / CrewAI)
-  # =================================================================
+
   ai-orchestration:
     build:
       context: ./ai-orchestration
       dockerfile: Dockerfile.prod
+
     container_name: diagram_ai_orchestration_prod
+
     environment:
       - ORCHESTRATION_PORT=8000
-      - REDIS_URL=${REDIS_URL:?REDIS_URL environment variable required}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY environment variable required}
+      - REDIS_URL=${REDIS_URL}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
+
       - GO_BACKEND_URL=http://backend:8080
+
       - AI_PROVIDER=${AI_PROVIDER:-openai}
-      - OPENAI_API_KEY=${OPEN_AI_API_KEY:?OPEN_AI_API_KEY environment variable required}
+
+      - OPENAI_API_KEY=${OPEN_AI_API_KEY}
       - OPENAI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
-      - OPENAI_BASE_URL=${OPEN_AI_BASE_URL:-https://9router.bby-dev.tech/v1}
-      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY:?OPEN_AI_API_KEY environment variable required}
+      - OPENAI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
+
+      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
       - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
-      - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-https://9router.bby-dev.tech/v1}
-    ports:
-      - "${ORCHESTRATION_PORT:-8000}:8000"
+      - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
+
+    expose:
+      - "8000"
+
     restart: always
+
     networks:
       - app-net
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+      - ai-network
 
-  # =================================================================
-  # 4. Background Queue Worker (Redis Consumer)
-  # =================================================================
+
   ai-worker:
     build:
       context: ./ai-orchestration
       dockerfile: Dockerfile.prod
+
     command: python worker.py
+
     container_name: diagram_ai_worker_prod
+
     environment:
-      - REDIS_URL=${REDIS_URL:?REDIS_URL environment variable required}
-      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY:?INTERNAL_SERVICE_KEY environment variable required}
+      - REDIS_URL=${REDIS_URL}
+      - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
+
       - GO_BACKEND_URL=http://backend:8080
+
       - AI_PROVIDER=${AI_PROVIDER:-openai}
-      - OPENAI_API_KEY=${OPEN_AI_API_KEY:?OPEN_AI_API_KEY environment variable required}
+
+      - OPENAI_API_KEY=${OPEN_AI_API_KEY}
       - OPENAI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
-      - OPENAI_BASE_URL=${OPEN_AI_BASE_URL:-https://9router.bby-dev.tech/v1}
-      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY:?OPEN_AI_API_KEY environment variable required}
+      - OPENAI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
+
+      - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
       - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
-      - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-https://9router.bby-dev.tech/v1}
+      - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
+
     restart: always
-    depends_on:
-      backend:
-        condition: service_healthy
-      ai-orchestration:
-        condition: service_healthy
+
     networks:
       - app-net
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
+      - ai-network
 
-# Dedicated bridge network for inter-container communication
+
 networks:
   app-net:
     driver: bridge
+
+  ai-network:
+    external: true
+    name: ai-network
