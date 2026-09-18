@@ -366,17 +366,21 @@ func (s *AIService) callOpenAI(
 		break
 	}
 
+	if respStatusCode != http.StatusOK {
+		trimmed := strings.TrimSpace(string(respBytes))
+		if respStatusCode == http.StatusGatewayTimeout || respStatusCode == http.StatusBadGateway || strings.HasPrefix(trimmed, "<") {
+			return "", fmt.Errorf("AI router gateway timeout (HTTP %d from %s): model '%s' took more than 90s to generate. Upstream proxy timed out", respStatusCode, s.baseURL, s.model)
+		}
+		var errResp dtos.ChatResponseOpenAI
+		if err := json.Unmarshal(respBytes, &errResp); err == nil && errResp.Error != nil && errResp.Error.Message != "" {
+			return "", fmt.Errorf("OpenAI API error (HTTP %d): %s", respStatusCode, errResp.Error.Message)
+		}
+		return "", fmt.Errorf("OpenAI API returned status %d: %s", respStatusCode, trimmed)
+	}
+
 	var openAIResp dtos.ChatResponseOpenAI
 	if err := json.Unmarshal(respBytes, &openAIResp); err != nil {
-		return "", fmt.Errorf("failed to unmarshal OpenAI response (HTTP %d): %w: %s", respStatusCode, err, string(respBytes))
-	}
-
-	if openAIResp.Error != nil && openAIResp.Error.Message != "" {
-		return "", fmt.Errorf("OpenAI API error: %s", openAIResp.Error.Message)
-	}
-
-	if respStatusCode != http.StatusOK {
-		return "", fmt.Errorf("OpenAI API returned status %d: %s", respStatusCode, string(respBytes))
+		return "", fmt.Errorf("failed to unmarshal OpenAI response: %w: %s", err, string(respBytes))
 	}
 
 	if len(openAIResp.Choices) == 0 {
