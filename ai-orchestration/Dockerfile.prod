@@ -1,31 +1,68 @@
 # ==========================================
-# Production Dockerfile for AI Orchestration
+# Stage 1: Build Dependencies & Prune Bloat
+# ==========================================
+FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /install
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+
+# Install dependencies and prune massive unused packages pulled by crewai
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip uninstall -y \
+    pyarrow \
+    lancedb \
+    kubernetes \
+    onnxruntime \
+    pdfminer.six \
+    pdfplumber \
+    pypdfium2 \
+    tokenizers \
+    hf_xet \
+    huggingface_hub \
+    openpyxl \
+    et_xmlfile \
+    textual \
+    pytest \
+    || true
+
+# Remove unused CLI binaries, tests, and bytecode
+RUN rm -f /usr/local/bin/uv /usr/local/bin/uvx && \
+    find /usr/local/lib/python3.12/site-packages -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/local/lib/python3.12/site-packages -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true && \
+    find /usr/local/lib/python3.12/site-packages -name "*.pyc" -delete && \
+    find /usr/local/lib/python3.12/site-packages -name "*.pyo" -delete
+
+# ==========================================
+# Stage 2: Hardened Minimal Production Image
 # ==========================================
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    DEBIAN_FRONTEND=noninteractive \
     HOME=/home/appuser
 
 WORKDIR /app
 
-# Install runtime dependencies, Chromium, and fonts
+# Only install runtime essentials (curl for docker healthcheck)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    chromium \
-    fonts-liberation \
-    fonts-noto-color-emoji \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Cache Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt && \
-    apt-get purge -y build-essential && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
+# Copy pre-built & pruned python site-packages and binaries from builder
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Create unprivileged application user
 RUN groupadd -g 10001 appgroup && \

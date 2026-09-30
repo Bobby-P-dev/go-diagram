@@ -14,5 +14,13 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+.cache/
+.config/
+.fontconfig/
+.data/
+.local/
 .vscode/
 .idea/
+Dockerfile*
+tests/
+
