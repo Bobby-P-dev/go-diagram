@@ -1,2 +1,2 @@
 # Knowledge package
-from .page_grammar import PAGE_GRAMMAR, get_page_grammar
+from .ui_ux_pro_max import get_design_system, query_design_knowledge

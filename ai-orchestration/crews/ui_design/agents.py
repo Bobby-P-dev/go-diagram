@@ -2,8 +2,6 @@ import os
 from typing import Optional
 from crewai import Agent, LLM
 from config import settings
-from tools.foundation_tool import get_foundation_tokens
-from tools.component_catalog_tool import get_component_info, list_all_components
 
 def get_llm(max_tokens: int = 8192, reasoning_effort: Optional[str] = None) -> LLM:
     """Configures the primary LLM for agents using OpenAI / OpenAI-compatible endpoint."""
