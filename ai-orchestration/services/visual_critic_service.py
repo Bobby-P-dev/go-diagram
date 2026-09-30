@@ -72,9 +72,9 @@ def critique_screenshot(
     theme_mode: str = "dark"
 ) -> VisualCritiqueDTO:
     """Sends screenshot to multimodal vision LLM and returns structured VisualCritiqueDTO."""
-    api_key = settings.openai_api_key or "sk-e0a1cf47f9c53ece-y50fyg-b2f36942"
-    base_url = settings.openai_base_url or "https://9router.bby-dev.tech/v1"
-    model = settings.openai_model or "cx/gpt-5.6-sol"
+    api_key = settings.openai_api_key or "sk-27534e0917d892bb-z0aum1-3e0637a7"
+    base_url = settings.openai_base_url or "http://localhost:20128/v1"
+    model = settings.openai_model or "gh/gpt-4o"
 
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     headers = {

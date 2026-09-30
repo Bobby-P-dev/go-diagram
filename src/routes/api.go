@@ -52,4 +52,11 @@ func RegisterRoutes(
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"healthy","service":"diagram-backend"}`))
 	})
+
+	// Root Service Info (Prevents 404 when opening backend domain directly)
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"service":"diagram-backend","status":"running","health":"/health"}`))
+	})
 }

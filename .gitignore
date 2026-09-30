@@ -64,8 +64,10 @@ ai-orchestration/.data/
 ai-orchestration/.config/
 ai-orchestration/.local/
 ai-orchestration/.cache/
+ai-orchestration/.fontconfig/
 go-diagram.git
 *.db
 *.sqlite
 *.sqlite3
+
 

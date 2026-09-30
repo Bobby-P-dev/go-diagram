@@ -291,3 +291,80 @@ def create_visual_patch_task(
 
 # Backward compatibility alias
 create_ui_synthesis_task = create_bespoke_ui_synthesis_task
+
+def create_fast_bespoke_ui_synthesis_task(
+    agent: Agent,
+    prompt: str,
+    device: str,
+    foundation: str,
+    theme_mode: str,
+    design_system: Dict[str, Any],
+    reference_info: Optional[ReferenceAnalysisDTO] = None,
+) -> Task:
+    ref_context = format_reference_context(reference_info)
+    category = design_system.get("category", "Modern Digital Product")
+    colors = design_system.get("colors", {})
+    typography = design_system.get("typography", {})
+    pattern = design_system.get("pattern", {})
+    anti_patterns = design_system.get("anti_patterns", "Generic AI slop, purple blobs, placeholder text")
+    constraints_list = design_system.get("constraints", [])
+    constraints = ", ".join(constraints_list) if isinstance(constraints_list, list) else str(constraints_list)
+
+    primary_color = colors.get("primary", "#92400E")
+    accent_color = colors.get("accent", primary_color)
+    bg_color = colors.get("background", "#FEF3C7")
+    fg_color = colors.get("foreground", "#78350F")
+    card_color = colors.get("card", "#FFFFFF")
+    border_color = colors.get("border", "#FDE68A")
+    heading_font = typography.get("heading", "Playfair Display")
+    body_font = typography.get("body", "Karla")
+    css_import = typography.get("css_import", "")
+
+    return Task(
+        description=(
+            f"You are the Principal UI Design Architect and Tailwind CSS Engineer.\n"
+            f"Synthesize an agency-grade, production-ready UI design conforming to the UIFrameSynthesisDTO schema.\n\n"
+            f"USER REQUEST: '{prompt}'\n"
+            f"TARGET DEVICE: '{device}' (Canvas: {375 if device == 'mobile' else 1024}px width, {812 if device == 'mobile' else 720}px height)\n"
+            f"THEME MODE: '{theme_mode}'\n"
+            f"{ref_context}\n"
+            f"===================================================\n"
+            f"DESIGN INTELLIGENCE (FROM UI/UX PRO MAX SKILL):\n"
+            f"- Industry / Category: {category}\n"
+            f"- Recommended Palette:\n"
+            f"  * Primary: {primary_color}\n"
+            f"  * Accent / CTA: {accent_color}\n"
+            f"  * Background: {bg_color}\n"
+            f"  * Foreground / Text: {fg_color}\n"
+            f"  * Card Surface: {card_color}\n"
+            f"  * Border: {border_color}\n"
+            f"- Typography Pairing:\n"
+            f"  * Heading: {heading_font}\n"
+            f"  * Body: {body_font}\n"
+            f"  * CSS Import: {css_import}\n"
+            f"- Conversion Pattern: {pattern.get('name', 'Modern Landing')} ({pattern.get('sections', 'Hero > Catalog > Craft > Reviews > CTA')})\n"
+            f"- Anti-Patterns (BANNED): {anti_patterns}\n"
+            f"- Constraints & Requirements: {constraints}\n"
+            f"===================================================\n\n"
+            f"STRICT OUTPUT REQUIREMENTS:\n"
+            f"1. Output MUST be structured JSON conforming to UIFrameSynthesisDTO.\n"
+            f"2. `title`: Creative, domain-specific brand name and headline.\n"
+            f"3. `device`: '{device}'.\n"
+            f"4. `width`: {375 if device == 'mobile' else 1024}, `height`: {812 if device == 'mobile' else 720}.\n"
+            f"5. `theme`: Provide full theme dict with mode='{theme_mode}', primary='{primary_color}', accent='{accent_color}', background='{bg_color}', foreground='{fg_color}', card='{card_color}', border='{border_color}'.\n"
+            f"6. `sections`: Array of 5-8 structured UISectionDTO objects for complete storytelling:\n"
+            f"   - navbar (brand, nav categories, action button)\n"
+            f"   - hero (compelling headline, badge, display typography, 2 action CTAs)\n"
+            f"   - product_grid or feature_grid (at least 4 authentic items with real names, prices or metrics, badges, and image hints)\n"
+            f"   - brand_craft or spotlight (signature narrative, artisan dedication, or unique offering)\n"
+            f"   - testimonials (3 authentic customer reviews with quotes and ratings)\n"
+            f"   - conversion_cta (high-contrast action module)\n"
+            f"   - footer (brand logo, navigation links, copyright)\n"
+            f"   * Every section must have a unique lowercase ID: 'sec-header', 'sec-hero', 'sec-catalog', 'sec-craft', 'sec-testimonials', 'sec-cta', 'sec-footer'.\n"
+            f"7. `raw_html`: Set to empty string \"\" (the downstream Bespoke Compiler automatically generates the pixel-perfect Tailwind CSS code from your structured sections and design system tokens).\n"
+        ),
+        expected_output="A complete UIFrameSynthesisDTO containing canonical sections, theme, and production-ready raw_html.",
+        agent=agent,
+        output_json=UIFrameSynthesisDTO,
+    )
+

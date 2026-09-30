@@ -44,16 +44,42 @@ def send_callback(callback_url: str, response_payload: JobCallbackResponse):
         "Content-Type": "application/json",
         "X-Internal-Service-Key": settings.internal_service_key,
     }
-    try:
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(
-                callback_url,
-                json=response_payload.model_dump(),
-                headers=headers
-            )
-            logger.info(f"Callback delivered to {callback_url} (HTTP {resp.status_code})")
-    except Exception as e:
-        logger.error(f"Failed to deliver callback to {callback_url}: {e}")
+
+    # Build candidate URLs to guarantee delivery inside Docker networks
+    urls_to_try = []
+    if "localhost" in callback_url or "127.0.0.1" in callback_url:
+        if settings.go_backend_url:
+            resolved = callback_url.replace("http://localhost:8080", settings.go_backend_url.rstrip("/"))
+            resolved = resolved.replace("http://127.0.0.1:8080", settings.go_backend_url.rstrip("/"))
+            urls_to_try.append(resolved)
+        urls_to_try.append("http://backend:8080/internal/v1/jobs/callback")
+        urls_to_try.append("http://diagram_backend_prod:8080/internal/v1/jobs/callback")
+    
+    if callback_url not in urls_to_try:
+        urls_to_try.append(callback_url)
+
+    delivered = False
+    last_error = None
+    with httpx.Client(timeout=30.0) as client:
+        for url in urls_to_try:
+            try:
+                resp = client.post(
+                    url,
+                    json=response_payload.model_dump(),
+                    headers=headers
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Callback delivered successfully to {url} (HTTP {resp.status_code})")
+                    delivered = True
+                    break
+                else:
+                    logger.warning(f"Callback to {url} returned HTTP {resp.status_code}: {resp.text}")
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Could not deliver callback to {url}: {e}")
+
+    if not delivered:
+        logger.error(f"Failed to deliver callback to all candidate URLs {urls_to_try}: {last_error}")
 
 def process_job(job_data: dict):
     """Processes a single UI generation job using CrewAI."""

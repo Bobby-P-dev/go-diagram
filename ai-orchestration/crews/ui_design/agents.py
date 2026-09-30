@@ -7,9 +7,9 @@ from tools.component_catalog_tool import get_component_info, list_all_components
 
 def get_llm(max_tokens: int = 8192, reasoning_effort: Optional[str] = None) -> LLM:
     """Configures the primary LLM for agents using OpenAI / OpenAI-compatible endpoint."""
-    api_key = settings.openai_api_key or "sk-e0a1cf47f9c53ece-y50fyg-b2f36942"
-    base_url = settings.openai_base_url or "https://9router.bby-dev.tech/v1"
-    model = settings.openai_model or "cx/gpt-5.6-sol"
+    api_key = settings.openai_api_key or "sk-27534e0917d892bb-z0aum1-3e0637a7"
+    base_url = settings.openai_base_url or "http://localhost:20128/v1"
+    model = settings.openai_model or "ag/gemini-3-flash"
     
     llm_model = f"openai/{model}" if not model.startswith("openai/") else model
     
@@ -113,7 +113,22 @@ def create_ui_component_specialist_agent(llm: Optional[LLM] = None) -> Agent:
         ),
         verbose=False,
         allow_delegation=False,
-        llm=llm or get_llm(max_tokens=8192, reasoning_effort="high"),
+        llm=llm or get_llm(max_tokens=8192, reasoning_effort="low"),
+    )
+
+def create_fast_bespoke_synthesizer_agent(llm: Optional[LLM] = None) -> Agent:
+    return Agent(
+        role="Principal Bespoke UI Synthesizer & Design System Architect",
+        goal="Synthesize high-aesthetic, production-ready Tailwind CSS interfaces adhering strictly to domain-rooted tokens and layout archetypes.",
+        backstory=(
+            "You are an elite Lead UI Designer and Tailwind CSS Engineer inspired by artisanal platforms like DesainPakeAI. "
+            "You reject generic purple templates, rigid 3-card monotony, and unrequested AI slop. "
+            "You take exact domain tokens (curated color palettes, Google font pairings, layout patterns) and directly transform them "
+            "into living, responsive, high-aesthetic HTML and structured canvas sections with authentic typography, photography, and microcopy."
+        ),
+        verbose=False,
+        allow_delegation=False,
+        llm=llm or get_llm(max_tokens=8192, reasoning_effort="low"),
     )
 
 def create_visual_patcher_agent(llm: Optional[LLM] = None) -> Agent:

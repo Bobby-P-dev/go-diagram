@@ -27,9 +27,9 @@ class Settings(BaseModel):
     ai_provider: str = os.getenv("AI_PROVIDER", "openai").lower()
     
     # OpenAI & Compatible (9router / OpenRouter / Local) Configuration
-    openai_api_key: str = get_env_any(["OPEN_AI_API_KEY", "OPENAI_API_KEY", "AI_API_KEY"], "sk-e0a1cf47f9c53ece-y50fyg-b2f36942")
-    openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "cx/gpt-5.6-sol")
-    openai_base_url: str = get_env_any(["OPEN_AI_BASE_URL", "OPENAI_BASE_URL", "AI_BASE_URL"], "https://9router.bby-dev.tech/v1")
+    openai_api_key: str = get_env_any(["OPEN_AI_API_KEY", "OPENAI_API_KEY", "AI_API_KEY"], "sk-27534e0917d892bb-z0aum1-3e0637a7")
+    openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "ag/gemini-3-flash")
+    openai_base_url: str = get_env_any(["OPEN_AI_BASE_URL", "OPENAI_BASE_URL", "AI_BASE_URL"], "http://localhost:20128/v1")
 
 settings = Settings()
 

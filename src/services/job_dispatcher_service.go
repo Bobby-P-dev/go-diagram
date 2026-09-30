@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -51,6 +53,24 @@ func generateUUID() string {
 	b[6] = (b[6] & 0x0f) | 0x40
 	b[8] = (b[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+func resolveInternalCallbackURL() string {
+	baseURL := os.Getenv("BACKEND_INTERNAL_URL")
+	if baseURL == "" {
+		baseURL = os.Getenv("GO_BACKEND_URL")
+	}
+	if baseURL == "" {
+		// If running inside Docker bridge network, check if 'backend' or 'diagram_backend_prod' is resolvable
+		if _, err := net.LookupHost("backend"); err == nil {
+			baseURL = "http://backend:8080"
+		} else if _, err := net.LookupHost("diagram_backend_prod"); err == nil {
+			baseURL = "http://diagram_backend_prod:8080"
+		} else {
+			baseURL = fmt.Sprintf("http://localhost:%s", config.Env.AppPort)
+		}
+	}
+	return fmt.Sprintf("%s/internal/v1/jobs/callback", strings.TrimSuffix(baseURL, "/"))
 }
 
 func (s *JobDispatcherService) DispatchUIDesignJob(
@@ -118,7 +138,7 @@ func (s *JobDispatcherService) DispatchUIDesignJob(
 			AccentColor:       accentColor,
 			ComplexityCeiling: "moderate",
 		},
-		CallbackURL: fmt.Sprintf("http://localhost:%s/internal/v1/jobs/callback", config.Env.AppPort),
+		CallbackURL: resolveInternalCallbackURL(),
 	}
 
 	reqBytes, err := json.Marshal(dispatchReq)
