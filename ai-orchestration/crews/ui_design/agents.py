@@ -7,7 +7,7 @@ def get_llm(max_tokens: int = 8192, reasoning_effort: Optional[str] = None) -> L
     """Configures the primary LLM for agents using OpenAI / OpenAI-compatible endpoint."""
     api_key = settings.openai_api_key or "sk-27534e0917d892bb-z0aum1-3e0637a7"
     base_url = settings.openai_base_url or "http://localhost:20128/v1"
-    model = settings.openai_model or "ag/gemini-3-flash"
+    model = settings.openai_model or "ag/gemini-3.8-flash-high"
     
     llm_model = f"openai/{model}" if not model.startswith("openai/") else model
     

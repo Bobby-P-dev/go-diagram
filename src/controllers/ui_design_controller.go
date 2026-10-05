@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
+	"github.com/Bobby-P-dev/go-diagram.git/src/middlewares"
 	"github.com/Bobby-P-dev/go-diagram.git/src/services"
 	"github.com/Bobby-P-dev/go-diagram.git/src/utils"
 )
@@ -29,6 +30,12 @@ func (c *UIDesignController) GetTemplates(w http.ResponseWriter, r *http.Request
 }
 
 func (c *UIDesignController) Create(w http.ResponseWriter, r *http.Request) {
+	user := middlewares.GetUserFromContext(r.Context())
+	if user != nil && !user.CanGenerateUI {
+		utils.RespondError(w, http.StatusForbidden, "Akses Ditolak", "Kredensial Anda tidak memiliki izin untuk fitur Desain Antarmuka (UI).")
+		return
+	}
+
 	var req dtos.CreateUIDesignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("[UIDesignController.Create] Decode error: %v", err)
@@ -51,6 +58,12 @@ func (c *UIDesignController) Chat(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		utils.RespondError(w, http.StatusBadRequest, "Missing project ID", "path parameter 'id' is required")
+		return
+	}
+
+	user := middlewares.GetUserFromContext(r.Context())
+	if user != nil && !user.CanGenerateUI {
+		utils.RespondError(w, http.StatusForbidden, "Akses Ditolak", "Kredensial Anda tidak memiliki izin untuk fitur Desain Antarmuka (UI).")
 		return
 	}
 

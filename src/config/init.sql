@@ -186,3 +186,61 @@ VALUES
     false
 )
 ON CONFLICT DO NOTHING;
+
+-- 12. Project Shares Table
+CREATE TABLE IF NOT EXISTS project_shares (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    share_token     VARCHAR(64) UNIQUE NOT NULL,
+    project_id      UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    title           VARCHAR(255) NOT NULL,
+    is_active       BOOLEAN NOT NULL DEFAULT true,
+    view_count      INT NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_project_shares_token ON project_shares (share_token);
+CREATE INDEX IF NOT EXISTS idx_project_shares_project_id ON project_shares (project_id);
+
+-- 13. Access Credentials Table (User & Admin Token-based Authentication)
+CREATE TABLE IF NOT EXISTS access_credentials (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    credential_key       VARCHAR(64) UNIQUE NOT NULL,
+    name                 VARCHAR(150) NOT NULL,
+    role                 VARCHAR(50) NOT NULL DEFAULT 'user',
+    is_active            BOOLEAN NOT NULL DEFAULT true,
+    can_generate_diagram BOOLEAN NOT NULL DEFAULT true,
+    can_generate_ui      BOOLEAN NOT NULL DEFAULT true,
+    expires_at           TIMESTAMPTZ,
+    last_login_at        TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_access_credentials_key ON access_credentials (credential_key);
+
+-- Idempotent column migrations for existing instances
+ALTER TABLE access_credentials ADD COLUMN IF NOT EXISTS can_generate_diagram BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE access_credentials ADD COLUMN IF NOT EXISTS can_generate_ui BOOLEAN NOT NULL DEFAULT true;
+
+-- Add user_id column to projects table if not exists
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES access_credentials(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_projects_user_id ON projects (user_id);
+
+-- Seed Master Administrator account
+INSERT INTO access_credentials (id, credential_key, name, role, is_active, expires_at, can_generate_diagram, can_generate_ui)
+VALUES (
+    'a0000000-0000-0000-0000-000000000001',
+    '@bbaystr772',
+    'Administrator Utama',
+    'admin',
+    true,
+    NULL,
+    true,
+    true
+)
+ON CONFLICT (id) DO UPDATE SET credential_key = '@bbaystr772', role = 'admin', is_active = true, can_generate_diagram = true, can_generate_ui = true;
+
+-- Associate all existing orphan projects with the Master Admin account
+UPDATE projects
+SET user_id = 'a0000000-0000-0000-0000-000000000001'
+WHERE user_id IS NULL;
+

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
 	"github.com/Bobby-P-dev/go-diagram.git/src/entities"
+	"github.com/Bobby-P-dev/go-diagram.git/src/middlewares"
 	"github.com/Bobby-P-dev/go-diagram.git/src/models"
 )
 
@@ -107,7 +108,13 @@ func (s *uiDesignService) CreateProjectFromTemplate(ctx context.Context, templat
 		"template_id":   tpl.ID,
 	})
 
-	project, err := s.projectModel.CreateWithMode(
+	userID := ""
+	if user := middlewares.GetUserFromContext(ctx); user != nil {
+		userID = user.ID
+	}
+
+	project, err := s.projectModel.CreateWithUser(
+		userID,
 		tpl.Name,
 		"ui_design",
 		"ui_design",
@@ -200,7 +207,13 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 			"product_context": productContext,
 		})
 
-		project, err := s.projectModel.CreateWithMode(
+		userID := ""
+		if user := middlewares.GetUserFromContext(ctx); user != nil {
+			userID = user.ID
+		}
+
+		project, err := s.projectModel.CreateWithUser(
+			userID,
 			title,
 			"ui_design",
 			"ui_design",
@@ -339,7 +352,13 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 		projectTitle = "UI Design: " + prompt
 	}
 
-	project, err := s.projectModel.CreateWithMode(
+	userID := ""
+	if user := middlewares.GetUserFromContext(ctx); user != nil {
+		userID = user.ID
+	}
+
+	project, err := s.projectModel.CreateWithUser(
+		userID,
 		projectTitle,
 		"ui_design",
 		"ui_design",
@@ -439,9 +458,14 @@ func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID
 }
 
 func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, projectID string, req *dtos.ChatRequest) (*dtos.ProjectResponse, error) {
-	project, messages, err := s.projectModel.GetByID(projectID)
+	userID := ""
+	if user := middlewares.GetUserFromContext(ctx); user != nil {
+		userID = user.ID
+	}
+
+	project, messages, err := s.projectModel.GetByIDScoped(projectID, userID, "")
 	if err != nil {
-		return nil, fmt.Errorf("project not found: %w", err)
+		return nil, fmt.Errorf("project not found or unauthorized: %w", err)
 	}
 
 	prompt := strings.TrimSpace(req.Prompt)

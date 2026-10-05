@@ -44,3 +44,39 @@ func TestERDPromptGuidelines(t *testing.T) {
 		t.Errorf("systemPrompt should explicitly forbid swimlanes for ERD")
 	}
 }
+
+func TestSanitizeJSONResponse(t *testing.T) {
+	// Case 1: Wrapped in markdown block with trailing comma
+	raw := "```json\n{\"message\": \"ok\", \"nodes\": [{\"id\": \"node-1\",},], \"edges\": [],}\n```"
+	sanitized := sanitizeJSONResponse(raw)
+	expected := "{\"message\": \"ok\", \"nodes\": [{\"id\": \"node-1\"}], \"edges\": []}"
+	if sanitized != expected {
+		t.Errorf("Expected:\n%s\nGot:\n%s", expected, sanitized)
+	}
+
+	// Case 2: Extra conversational text around JSON
+	raw2 := "Here is your diagram:\n{\"message\": \"done\", \"nodes\": []}\nHope this helps!"
+	sanitized2 := sanitizeJSONResponse(raw2)
+	expected2 := "{\"message\": \"done\", \"nodes\": []}"
+	if sanitized2 != expected2 {
+		t.Errorf("Expected:\n%s\nGot:\n%s", expected2, sanitized2)
+	}
+
+	// Case 3: UTF-8 BOM
+	raw3 := "\xef\xbb\xbf{\"message\": \"bom\"}"
+	sanitized3 := sanitizeJSONResponse(raw3)
+	expected3 := "{\"message\": \"bom\"}"
+	if sanitized3 != expected3 {
+		t.Errorf("Expected:\n%s\nGot:\n%s", expected3, sanitized3)
+	}
+}
+
+func TestNewDiagramTypesPromptGuidelines(t *testing.T) {
+	types := []string{"sequence", "c4", "network", "cicd"}
+	for _, dt := range types {
+		if !strings.Contains(baseSystemPrompt, strings.ToUpper(dt)) && !strings.Contains(baseSystemPrompt, dt) {
+			t.Errorf("baseSystemPrompt should contain guidelines for %s", dt)
+		}
+	}
+}
+

@@ -166,11 +166,37 @@ UNIVERSAL DIAGRAM GUIDELINES:
    - "output": BI Dashboards, ML Model inference, Reporting services.
    - Edges: Data stream names or batch frequency (e.g., "Raw Stream", "Parquet Batch", "Realtime Webhook").
 
-7. MINDMAP / CONCEPT HIERARCHY / NETWORK TOPOLOGY:
-   - "input": Root concept, main topic, or Public Internet.
-   - "decision": Routers, Firewalls, or major decision points.
-   - "default": Branches, subtopics, internal subnets, or team departments.
-   - "output": Leaves, action items, or secured internal servers.
+7. MINDMAP / CONCEPT HIERARCHY:
+   - "input": Root concept or main topic.
+   - "decision": Core branching or major categorical decision points.
+   - "default": Subtopics, branches, or team functional groups.
+   - "output": Leaves, deliverables, or action items.
+
+8. SEQUENCE DIAGRAM / DISTRIBUTED TRACING:
+   - Lifeline nodes: "input" for User/Client, "default" for API Gateway, Backend Services, External Webhooks, and "database" for DB/Storage.
+   - Edges: Chronological request/response messages with numbered sequence prefixes (e.g. "1. POST /login", "2. Verify Hash", "3. 200 OK + Session Cookie").
+   - Synchronous requests: solid lines. Asynchronous/Return messages: dashed lines.
+
+9. C4 ARCHITECTURE MODEL (CONTEXT & CONTAINERS):
+   - "input": External Actors, Customer Personas, or Third-Party Banking/Payment systems.
+   - "decision": Reverse Proxy, Edge Gateways, or API Load Balancers.
+   - "default": Main Software Containers (e.g., 'Web SPA [Vue 3]', 'Backend API [Go]', 'Worker [Python]').
+   - "database": Data Stores, Message Brokers, and Caches (e.g., 'PostgreSQL [Relational Database]', 'Redis [Cache]').
+   - Edges: Explicit communication protocols (e.g., 'HTTPS/REST', 'gRPC', 'AMQP / RabbitMQ', 'SQL TCP:5432').
+
+10. NETWORK & CLOUD INFRASTRUCTURE TOPOLOGY:
+   - "input": Public Internet, Anycast DNS, CDN (Cloudflare).
+   - "decision": WAF, NAT Gateways, Ingress Controllers, Application Load Balancers.
+   - "default": VPC Subnets, Bastion Hosts, Kubernetes Pods, Worker Nodes.
+   - "database": Managed Database Clusters (RDS Aurora Multi-AZ, Elasticache, S3 Buckets).
+   - Edges: Network security groups, CIDRs, and port mappings (e.g., 'HTTPS 443', 'Kube-API 6443', 'VPC Peering').
+
+11. CI/CD & DEVOPS PIPELINES (CICD):
+   - "input": Git Event / Trigger (e.g., 'Git Push to main', 'Pull Request Created').
+   - "default": Automated pipeline stages (e.g., 'Lint & Static Check', 'Run Unit Tests', 'Build Docker Image', 'Security Scan').
+   - "decision": Quality gates or manual approvals (e.g., 'Tests Passed?', 'Approval Gate').
+   - "output": Deployment destinations (e.g., 'Deploy Staging K8s', 'Canary Rollout 10%', 'Slack Alert Notification').
+   - Edges: Stage execution dependencies and condition labels.
 
 SMART INCREMENTAL EDITING RULES:
 - If STATE DIAGRAM SAAT INI already exists:
@@ -197,14 +223,41 @@ func (s *AIService) GenerateDiagram(
 			systemPrompt += "\n- MANDATORY: Design a procedural step-by-step flowchart. Use 'input' (start), 'decision' (branches with Yes/No edges), 'default' (action steps), and 'output' (end/terminal)."
 		case "architecture", "system":
 			systemPrompt += "\n- MANDATORY: Design system architecture. Use 'input' (clients/CDN), 'decision' (gateways/load balancers), 'default' (services/message queues), and 'database' (storage/cache)."
+		case "sequence", "interaction":
+			systemPrompt += "\n- MANDATORY: Design a Sequence Diagram depicting chronological message interactions.\n" +
+				"  1. Define lifeline nodes: 'input' for User/Actor, 'default' for API Gateway, Services, Webhooks, and 'database' for Data Stores.\n" +
+				"  2. Model chronological requests and responses with numbered sequential labels (e.g. '1. POST /login', '2. Validate Credentials', '3. 200 OK + JWT').\n" +
+				"  3. Use solid edges ('dashed': false) for sync requests, and dashed edges ('dashed': true) for returns/async responses.\n" +
+				"  4. Arrange sequence progression from left to right."
+		case "c4", "context", "container":
+			systemPrompt += "\n- MANDATORY: Design a C4 Architecture Model (Context & Container Diagram).\n" +
+				"  1. 'input': External Actors or Third-Party Systems.\n" +
+				"  2. 'decision': Reverse Proxy, API Gateway, or Edge Ingress.\n" +
+				"  3. 'default': Container Applications (e.g. 'Single-Page App [Vue/React]', 'Backend API [Go]', 'Worker [Python]').\n" +
+				"  4. 'database': Databases, Cache Stores, and Message Buses (e.g. 'PostgreSQL [Relational Database]', 'Redis [Cache]').\n" +
+				"  5. Edges: Explicit protocols and roles (e.g. 'Delivers SPA via HTTPS', 'Sends REST/JSON calls', 'Reads/Writes data via TCP 5432')."
+		case "network", "infra", "infrastructure", "security":
+			systemPrompt += "\n- MANDATORY: Design Cloud Network & Infrastructure Topology.\n" +
+				"  1. 'input': Public Internet, Route53 DNS, Cloudflare CDN.\n" +
+				"  2. 'decision': WAF, Edge Firewalls, NAT Gateways, Application Load Balancers.\n" +
+				"  3. 'default': Compute instances, Bastion hosts, Kubernetes pods, and worker nodes inside Private Subnets.\n" +
+				"  4. 'database': Managed Database Clusters (RDS Aurora, Multi-AZ PostgreSQL, Redis Cluster).\n" +
+				"  5. Edges: Security groups, CIDRs, and port mappings (e.g. 'Port 443 HTTPS', 'Port 6443 Kube-API', 'VPC Peering')."
+		case "cicd", "devops", "gitflow":
+			systemPrompt += "\n- MANDATORY: Design a CI/CD DevOps & Deployment Pipeline.\n" +
+				"  1. 'input': Git Repository Trigger (e.g. 'PR Merged to main', 'Git Tag v1.0.0').\n" +
+				"  2. 'default': Automated pipeline stages (e.g. 'Lint & Static Analysis', 'Unit & Integration Tests', 'Build Docker Image', 'Security Scan').\n" +
+				"  3. 'decision': Quality gates & approvals (e.g. 'Tests Passed?', 'Approval Gate').\n" +
+				"  4. 'output': Deployment targets (e.g. 'Deploy Staging K8s', 'Canary Rollout 10%', 'Slack Notification').\n" +
+				"  5. Edges: Ordered pipeline progression with condition labels."
 		case "state", "lifecycle":
 			systemPrompt += "\n- MANDATORY: Design state machine/lifecycle transitions. Nodes represent states (Draft, Active, Finished) and edges represent transition events/triggers."
 		case "uml", "class":
 			systemPrompt += "\n- MANDATORY: Design UML class diagram. Use type: 'database' where columns list attributes and methods."
 		case "pipeline", "dfd":
 			systemPrompt += "\n- MANDATORY: Design data pipeline / ETL data flow. Use 'input' (data sources), 'default' (transformations/stream processing), 'database' (lake/warehouse), and 'output' (analytics/dashboards)."
-		case "mindmap", "network":
-			systemPrompt += "\n- MANDATORY: Design concept mindmap or network topology. Use 'input' (root concept or core gateway), 'decision' (major branch points or routers), 'default' (subtopics or subnet nodes), and 'output' (leaves or endpoints)."
+		case "mindmap", "concept":
+			systemPrompt += "\n- MANDATORY: Design concept mindmap. Use 'input' (root concept), 'decision' (major branch points), 'default' (subtopics), and 'output' (leaves/action items)."
 		case "swimlane", "bpmn":
 			systemPrompt += "\n- MANDATORY: Design a Cross-Functional Swimlane BPMN Flowchart ala Eraser.io.\n" +
 				"  1. Identify 2 to 5 primary actors/departments (e.g. 'REQUESTER', 'APPROVER', 'PURCHASING', 'SUPPLIER', 'ERP SYSTEM').\n" +
@@ -554,23 +607,33 @@ func (s *AIService) SanitizeJSON(raw string) string {
 	return sanitizeJSONResponse(raw)
 }
 
-var codeBlockRegex = regexp.MustCompile("(?s)```(?:json)?\\s*\n?(.*?)\\s*```")
+var (
+	codeBlockRegex     = regexp.MustCompile("(?s)```(?:json)?\\s*\n?(.*?)\\s*```")
+	trailingCommaRegex = regexp.MustCompile(`,(\s*[}\]])`)
+)
 
 func sanitizeJSONResponse(raw string) string {
 	trimmed := strings.TrimSpace(raw)
+	// Remove UTF-8 BOM if present
+	trimmed = strings.TrimPrefix(trimmed, "\xef\xbb\xbf")
 
 	if matches := codeBlockRegex.FindStringSubmatch(trimmed); len(matches) > 1 {
-		return strings.TrimSpace(matches[1])
+		trimmed = strings.TrimSpace(matches[1])
 	}
 
 	start := strings.Index(trimmed, "{")
 	end := strings.LastIndex(trimmed, "}")
 	if start != -1 && end != -1 && end > start {
-		return strings.TrimSpace(trimmed[start : end+1])
+		trimmed = strings.TrimSpace(trimmed[start : end+1])
+	} else {
+		trimmed = strings.TrimPrefix(trimmed, "```json")
+		trimmed = strings.TrimPrefix(trimmed, "```")
+		trimmed = strings.TrimSuffix(trimmed, "```")
+		trimmed = strings.TrimSpace(trimmed)
 	}
 
-	trimmed = strings.TrimPrefix(trimmed, "```json")
-	trimmed = strings.TrimPrefix(trimmed, "```")
-	trimmed = strings.TrimSuffix(trimmed, "```")
-	return strings.TrimSpace(trimmed)
+	// Remove trailing commas before closing curly braces or brackets
+	trimmed = trailingCommaRegex.ReplaceAllString(trimmed, "$1")
+
+	return trimmed
 }

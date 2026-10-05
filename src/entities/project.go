@@ -7,6 +7,7 @@ import (
 
 type Project struct {
 	ID           string          `json:"id"`
+	UserID       string          `json:"user_id,omitempty"`
 	Title        string          `json:"title"`
 	DiagramType  string          `json:"diagram_type"`
 	ProjectMode  string          `json:"project_mode,omitempty"`
@@ -20,6 +21,7 @@ type Project struct {
 
 type ProjectSummary struct {
 	ID          string    `json:"id"`
+	UserID      string    `json:"user_id,omitempty"`
 	Title       string    `json:"title"`
 	DiagramType string    `json:"diagram_type"`
 	ProjectMode string    `json:"project_mode"`

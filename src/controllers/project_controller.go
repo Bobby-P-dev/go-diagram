@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
+	"github.com/Bobby-P-dev/go-diagram.git/src/middlewares"
 	"github.com/Bobby-P-dev/go-diagram.git/src/services"
 	"github.com/Bobby-P-dev/go-diagram.git/src/utils"
 )
@@ -28,7 +29,17 @@ func (c *ProjectController) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	result, err := c.service.CreateNewProject(req)
+	user := middlewares.GetUserFromContext(r.Context())
+	if user != nil && !user.CanGenerateDiagram {
+		utils.RespondError(w, http.StatusForbidden, "Akses Ditolak", "Kredensial Anda tidak memiliki izin untuk membuat atau mengedit Diagram Alur.")
+		return
+	}
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
+	result, err := c.service.CreateNewProjectForUser(userID, req)
 	if err != nil {
 		log.Printf("[ProjectController.Create] Service error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to create project", err.Error())
@@ -45,6 +56,16 @@ func (c *ProjectController) Chat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user := middlewares.GetUserFromContext(r.Context())
+	if user != nil && !user.CanGenerateDiagram {
+		utils.RespondError(w, http.StatusForbidden, "Akses Ditolak", "Kredensial Anda tidak memiliki izin untuk fitur Diagram Alur.")
+		return
+	}
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
 	var req dtos.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("[ProjectController.Chat] Decode error: %v", err)
@@ -53,7 +74,7 @@ func (c *ProjectController) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	result, err := c.service.SendChatMessage(id, req)
+	result, err := c.service.SendChatMessageScoped(id, req, userID)
 	if err != nil {
 		log.Printf("[ProjectController.Chat] Service error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to process chat message", err.Error())
@@ -70,7 +91,14 @@ func (c *ProjectController) GetByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := c.service.GetProjectByID(id)
+	user := middlewares.GetUserFromContext(r.Context())
+	userID, userRole := "", ""
+	if user != nil {
+		userID = user.ID
+		userRole = user.Role
+	}
+
+	result, err := c.service.GetProjectByIDScoped(id, userID, userRole)
 	if err != nil {
 		log.Printf("[ProjectController.GetByID] Service error: %v", err)
 		utils.RespondError(w, http.StatusNotFound, "Project not found", err.Error())
@@ -78,6 +106,39 @@ func (c *ProjectController) GetByID(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondJSON(w, http.StatusOK, "Project retrieved successfully", result)
+}
+
+func (c *ProjectController) UpdateGraph(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		utils.RespondError(w, http.StatusBadRequest, "Missing project ID", "path parameter 'id' is required")
+		return
+	}
+
+	user := middlewares.GetUserFromContext(r.Context())
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
+	var req struct {
+		Nodes json.RawMessage `json:"nodes"`
+		Edges json.RawMessage `json:"edges"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[ProjectController.UpdateGraph] Decode error: %v", err)
+		utils.RespondError(w, http.StatusBadRequest, "Invalid request body", err.Error())
+		return
+	}
+	defer r.Body.Close()
+
+	if err := c.service.UpdateProjectGraphScoped(id, userID, req.Nodes, req.Edges); err != nil {
+		log.Printf("[ProjectController.UpdateGraph] Service error: %v", err)
+		utils.RespondError(w, http.StatusNotFound, "Failed to update project graph", err.Error())
+		return
+	}
+
+	utils.RespondJSON(w, http.StatusOK, "Graph positions updated successfully", map[string]bool{"success": true})
 }
 
 func (c *ProjectController) GetAll(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +157,13 @@ func (c *ProjectController) GetAll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := c.service.ListProjects(limit, offset)
+	user := middlewares.GetUserFromContext(r.Context())
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
+	result, err := c.service.ListProjectsForUser(userID, limit, offset)
 	if err != nil {
 		log.Printf("[ProjectController.GetAll] Service error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to retrieve projects", err.Error())
@@ -113,7 +180,13 @@ func (c *ProjectController) TogglePin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := c.service.ToggleProjectPin(id)
+	user := middlewares.GetUserFromContext(r.Context())
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
+	result, err := c.service.ToggleProjectPinScoped(id, userID)
 	if err != nil {
 		log.Printf("[ProjectController.TogglePin] Service error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to toggle pin", err.Error())
@@ -130,7 +203,13 @@ func (c *ProjectController) GetVersions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	versions, err := c.service.GetProjectVersions(id)
+	user := middlewares.GetUserFromContext(r.Context())
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
+	versions, err := c.service.GetProjectVersionsScoped(id, userID)
 	if err != nil {
 		log.Printf("[ProjectController.GetVersions] Service error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to retrieve project versions", err.Error())
@@ -148,7 +227,13 @@ func (c *ProjectController) Rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := c.service.RollbackToVersion(id, versionID)
+	user := middlewares.GetUserFromContext(r.Context())
+	userID := ""
+	if user != nil {
+		userID = user.ID
+	}
+
+	result, err := c.service.RollbackToVersionScoped(id, versionID, userID)
 	if err != nil {
 		log.Printf("[ProjectController.Rollback] Service error: %v", err)
 		utils.RespondError(w, http.StatusInternalServerError, "Failed to rollback project version", err.Error())

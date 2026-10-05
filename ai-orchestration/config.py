@@ -28,7 +28,7 @@ class Settings(BaseModel):
     
     # OpenAI & Compatible (9router / OpenRouter / Local) Configuration
     openai_api_key: str = get_env_any(["OPEN_AI_API_KEY", "OPENAI_API_KEY", "AI_API_KEY"], "sk-27534e0917d892bb-z0aum1-3e0637a7")
-    openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "ag/gemini-3-flash")
+    openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "ag/gemini-3.8-flash-high")
     openai_base_url: str = get_env_any(["OPEN_AI_BASE_URL", "OPENAI_BASE_URL", "AI_BASE_URL"], "http://localhost:20128/v1")
 
 settings = Settings()

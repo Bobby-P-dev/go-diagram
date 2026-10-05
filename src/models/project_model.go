@@ -11,10 +11,14 @@ import (
 type ProjectModelInterface interface {
 	Create(title, diagramType string, nodes, edges json.RawMessage) (*entities.Project, error)
 	CreateWithMode(title, diagramType, projectMode string, metadata, nodes, edges json.RawMessage) (*entities.Project, error)
+	CreateWithUser(userID, title, diagramType, projectMode string, metadata, nodes, edges json.RawMessage) (*entities.Project, error)
 	GetByID(id string) (*entities.Project, []entities.ChatMessage, error)
+	GetByIDScoped(id, userID, userRole string) (*entities.Project, []entities.ChatMessage, error)
 	UpdateGraph(id string, nodes, edges json.RawMessage) error
 	GetAll() ([]entities.Project, error)
+	GetAllScoped(userID string) ([]entities.Project, error)
 	GetPaginated(limit, offset int) ([]entities.ProjectSummary, int, error)
+	GetPaginatedScoped(userID string, limit, offset int) ([]entities.ProjectSummary, int, error)
 	TogglePin(id string) (bool, error)
 }
 
@@ -27,10 +31,14 @@ func NewProjectModel(db *sql.DB) ProjectModelInterface {
 }
 
 func (m *projectModel) Create(title, diagramType string, nodes, edges json.RawMessage) (*entities.Project, error) {
-	return m.CreateWithMode(title, diagramType, "diagram", json.RawMessage("{}"), nodes, edges)
+	return m.CreateWithUser("", title, diagramType, "diagram", json.RawMessage("{}"), nodes, edges)
 }
 
 func (m *projectModel) CreateWithMode(title, diagramType, projectMode string, metadata, nodes, edges json.RawMessage) (*entities.Project, error) {
+	return m.CreateWithUser("", title, diagramType, projectMode, metadata, nodes, edges)
+}
+
+func (m *projectModel) CreateWithUser(userID, title, diagramType, projectMode string, metadata, nodes, edges json.RawMessage) (*entities.Project, error) {
 	if len(nodes) == 0 {
 		nodes = json.RawMessage("[]")
 	}
@@ -43,16 +51,20 @@ func (m *projectModel) CreateWithMode(title, diagramType, projectMode string, me
 	if projectMode == "" {
 		projectMode = "diagram"
 	}
+	if userID == "" {
+		userID = MasterAdminID
+	}
 
 	query := `
-		INSERT INTO projects (title, diagram_type, project_mode, metadata, current_nodes, current_edges, is_pinned, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, false, NOW(), NOW())
-		RETURNING id, title, diagram_type, project_mode, metadata, is_pinned, current_nodes, current_edges, created_at, updated_at
+		INSERT INTO projects (user_id, title, diagram_type, project_mode, metadata, current_nodes, current_edges, is_pinned, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, false, NOW(), NOW())
+		RETURNING id, COALESCE(user_id, 'a0000000-0000-0000-0000-000000000001'::uuid), title, diagram_type, project_mode, metadata, is_pinned, current_nodes, current_edges, created_at, updated_at
 	`
 
 	var p entities.Project
-	err := m.db.QueryRow(query, title, diagramType, projectMode, metadata, nodes, edges).Scan(
+	err := m.db.QueryRow(query, userID, title, diagramType, projectMode, metadata, nodes, edges).Scan(
 		&p.ID,
+		&p.UserID,
 		&p.Title,
 		&p.DiagramType,
 		&p.ProjectMode,
@@ -71,8 +83,12 @@ func (m *projectModel) CreateWithMode(title, diagramType, projectMode string, me
 }
 
 func (m *projectModel) GetByID(id string) (*entities.Project, []entities.ChatMessage, error) {
+	return m.GetByIDScoped(id, "", "")
+}
+
+func (m *projectModel) GetByIDScoped(id, userID, userRole string) (*entities.Project, []entities.ChatMessage, error) {
 	queryProject := `
-		SELECT id, title, diagram_type, COALESCE(project_mode, 'diagram'), COALESCE(metadata, '{}'::jsonb), is_pinned, current_nodes, current_edges, created_at, updated_at
+		SELECT id, COALESCE(user_id, 'a0000000-0000-0000-0000-000000000001'::uuid), title, diagram_type, COALESCE(project_mode, 'diagram'), COALESCE(metadata, '{}'::jsonb), is_pinned, current_nodes, current_edges, created_at, updated_at
 		FROM projects
 		WHERE id = $1
 	`
@@ -80,6 +96,7 @@ func (m *projectModel) GetByID(id string) (*entities.Project, []entities.ChatMes
 	var p entities.Project
 	err := m.db.QueryRow(queryProject, id).Scan(
 		&p.ID,
+		&p.UserID,
 		&p.Title,
 		&p.DiagramType,
 		&p.ProjectMode,
@@ -95,6 +112,11 @@ func (m *projectModel) GetByID(id string) (*entities.Project, []entities.ChatMes
 			return nil, nil, fmt.Errorf("project not found: %s", id)
 		}
 		return nil, nil, fmt.Errorf("failed to find project: %w", err)
+	}
+
+	// Strict scope verification: every user (including admin) can ONLY access their own projects!
+	if userID != "" && p.UserID != userID {
+		return nil, nil, fmt.Errorf("project not found or unauthorized: %s", id)
 	}
 
 	queryMessages := `
@@ -168,13 +190,31 @@ func (m *projectModel) UpdateGraph(id string, nodes, edges json.RawMessage) erro
 }
 
 func (m *projectModel) GetAll() ([]entities.Project, error) {
-	query := `
-		SELECT id, title, diagram_type, COALESCE(project_mode, 'diagram'), COALESCE(metadata, '{}'::jsonb), is_pinned, current_nodes, current_edges, created_at, updated_at
-		FROM projects
-		ORDER BY is_pinned DESC, updated_at DESC
-	`
+	return m.GetAllScoped("")
+}
 
-	rows, err := m.db.Query(query)
+func (m *projectModel) GetAllScoped(userID string) ([]entities.Project, error) {
+	var query string
+	var rows *sql.Rows
+	var err error
+
+	if userID != "" {
+		query = `
+			SELECT id, COALESCE(user_id, 'a0000000-0000-0000-0000-000000000001'::uuid), title, diagram_type, COALESCE(project_mode, 'diagram'), COALESCE(metadata, '{}'::jsonb), is_pinned, current_nodes, current_edges, created_at, updated_at
+			FROM projects
+			WHERE user_id = $1
+			ORDER BY is_pinned DESC, updated_at DESC
+		`
+		rows, err = m.db.Query(query, userID)
+	} else {
+		query = `
+			SELECT id, COALESCE(user_id, 'a0000000-0000-0000-0000-000000000001'::uuid), title, diagram_type, COALESCE(project_mode, 'diagram'), COALESCE(metadata, '{}'::jsonb), is_pinned, current_nodes, current_edges, created_at, updated_at
+			FROM projects
+			ORDER BY is_pinned DESC, updated_at DESC
+		`
+		rows, err = m.db.Query(query)
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to query projects: %w", err)
 	}
@@ -185,6 +225,7 @@ func (m *projectModel) GetAll() ([]entities.Project, error) {
 		var p entities.Project
 		err := rows.Scan(
 			&p.ID,
+			&p.UserID,
 			&p.Title,
 			&p.DiagramType,
 			&p.ProjectMode,
@@ -209,6 +250,10 @@ func (m *projectModel) GetAll() ([]entities.Project, error) {
 }
 
 func (m *projectModel) GetPaginated(limit, offset int) ([]entities.ProjectSummary, int, error) {
+	return m.GetPaginatedScoped("", limit, offset)
+}
+
+func (m *projectModel) GetPaginatedScoped(userID string, limit, offset int) ([]entities.ProjectSummary, int, error) {
 	if limit <= 0 {
 		limit = 15
 	}
@@ -219,22 +264,40 @@ func (m *projectModel) GetPaginated(limit, offset int) ([]entities.ProjectSummar
 		offset = 0
 	}
 
-	// 1. Get total count
 	var totalCount int
-	err := m.db.QueryRow("SELECT COUNT(*) FROM projects").Scan(&totalCount)
+	var countQuery string
+	var selectQuery string
+	var countArgs []interface{}
+	var selectArgs []interface{}
+
+	if userID != "" {
+		countQuery = "SELECT COUNT(*) FROM projects WHERE user_id = $1"
+		countArgs = []interface{}{userID}
+		selectQuery = `
+			SELECT id, COALESCE(user_id, 'a0000000-0000-0000-0000-000000000001'::uuid), title, diagram_type, COALESCE(project_mode, 'diagram'), is_pinned, created_at, updated_at
+			FROM projects
+			WHERE user_id = $1
+			ORDER BY is_pinned DESC, updated_at DESC
+			LIMIT $2 OFFSET $3
+		`
+		selectArgs = []interface{}{userID, limit, offset}
+	} else {
+		countQuery = "SELECT COUNT(*) FROM projects"
+		selectQuery = `
+			SELECT id, COALESCE(user_id, 'a0000000-0000-0000-0000-000000000001'::uuid), title, diagram_type, COALESCE(project_mode, 'diagram'), is_pinned, created_at, updated_at
+			FROM projects
+			ORDER BY is_pinned DESC, updated_at DESC
+			LIMIT $1 OFFSET $2
+		`
+		selectArgs = []interface{}{limit, offset}
+	}
+
+	err := m.db.QueryRow(countQuery, countArgs...).Scan(&totalCount)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to count projects: %w", err)
 	}
 
-	// 2. Query ONLY essential fields (NO current_nodes/current_edges for maximum performance)
-	query := `
-		SELECT id, title, diagram_type, COALESCE(project_mode, 'diagram'), is_pinned, created_at, updated_at
-		FROM projects
-		ORDER BY is_pinned DESC, updated_at DESC
-		LIMIT $1 OFFSET $2
-	`
-
-	rows, err := m.db.Query(query, limit, offset)
+	rows, err := m.db.Query(selectQuery, selectArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to query paginated projects: %w", err)
 	}
@@ -245,6 +308,7 @@ func (m *projectModel) GetPaginated(limit, offset int) ([]entities.ProjectSummar
 		var s entities.ProjectSummary
 		err := rows.Scan(
 			&s.ID,
+			&s.UserID,
 			&s.Title,
 			&s.DiagramType,
 			&s.ProjectMode,

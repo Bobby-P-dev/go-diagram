@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/controllers"
+	"github.com/Bobby-P-dev/go-diagram.git/src/middlewares"
 )
 
 func RegisterRoutes(
@@ -12,7 +13,25 @@ func RegisterRoutes(
 	uiDesignCtrl *controllers.UIDesignController,
 	workspaceCtrl *controllers.WorkspaceController,
 	asyncJobCtrl *controllers.AsyncJobController,
+	shareCtrl *controllers.ShareController,
+	authCtrl *controllers.AuthController,
+	adminCtrl *controllers.AdminController,
 ) {
+	// Auth Routes
+	if authCtrl != nil {
+		mux.HandleFunc("POST /api/auth/verify", authCtrl.Verify)
+		mux.HandleFunc("GET /api/auth/me", authCtrl.Me)
+		mux.HandleFunc("POST /api/auth/logout", authCtrl.Logout)
+	}
+
+	// Admin Credentials Management Routes
+	if adminCtrl != nil {
+		mux.HandleFunc("GET /api/admin/credentials", middlewares.RequireAdmin(adminCtrl.GetCredentials))
+		mux.HandleFunc("POST /api/admin/credentials", middlewares.RequireAdmin(adminCtrl.CreateCredential))
+		mux.HandleFunc("PUT /api/admin/credentials/{id}", middlewares.RequireAdmin(adminCtrl.UpdateCredential))
+		mux.HandleFunc("DELETE /api/admin/credentials/{id}", middlewares.RequireAdmin(adminCtrl.DeleteCredential))
+	}
+
 	// Diagram Routes
 	mux.HandleFunc("POST /api/projects", projectCtrl.Create)
 	mux.HandleFunc("POST /api/projects/{id}/chat", projectCtrl.Chat)
@@ -21,7 +40,17 @@ func RegisterRoutes(
 	mux.HandleFunc("POST /api/projects/{id}/pin", projectCtrl.TogglePin)
 	mux.HandleFunc("GET /api/projects/{id}/versions", projectCtrl.GetVersions)
 	mux.HandleFunc("POST /api/projects/{id}/rollback/{versionId}", projectCtrl.Rollback)
+	mux.HandleFunc("PUT /api/projects/{id}/graph", projectCtrl.UpdateGraph)
 	mux.HandleFunc("GET /api/templates", projectCtrl.GetTemplates)
+
+	// Share Project & Chat Routes (Public & Authenticated)
+	if shareCtrl != nil {
+		mux.HandleFunc("POST /api/projects/{id}/share", shareCtrl.CreateShare)
+		mux.HandleFunc("GET /api/projects/{id}/share", shareCtrl.GetShareStatus)
+		mux.HandleFunc("DELETE /api/projects/{id}/share", shareCtrl.RevokeShare)
+		mux.HandleFunc("GET /api/shared/{token}", shareCtrl.GetSharedProject)
+		mux.HandleFunc("POST /api/shared/{token}/fork", shareCtrl.ForkSharedProject)
+	}
 
 	// UI Design Modular Routes
 	mux.HandleFunc("GET /api/ui-design/templates", uiDesignCtrl.GetTemplates)

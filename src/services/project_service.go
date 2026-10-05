@@ -50,6 +50,10 @@ func generateTitle(prompt string) string {
 }
 
 func (s *ProjectService) CreateNewProject(req dtos.CreateProjectRequest) (*dtos.ProjectResponse, error) {
+	return s.CreateNewProjectForUser("", req)
+}
+
+func (s *ProjectService) CreateNewProjectForUser(userID string, req dtos.CreateProjectRequest) (*dtos.ProjectResponse, error) {
 	// 1. Instant creation from template if TemplateID is provided
 	if req.TemplateID != "" && s.templateModel != nil {
 		tpl, err := s.templateModel.GetTemplateByID(req.TemplateID)
@@ -62,7 +66,7 @@ func (s *ProjectService) CreateNewProject(req dtos.CreateProjectRequest) (*dtos.
 			title = generateTitle(req.Prompt)
 		}
 
-		project, err := s.projectModel.Create(title, tpl.DiagramType, tpl.Nodes, tpl.Edges)
+		project, err := s.projectModel.CreateWithUser(userID, title, tpl.DiagramType, "diagram", json.RawMessage("{}"), tpl.Nodes, tpl.Edges)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create project from template: %w", err)
 		}
@@ -94,7 +98,7 @@ func (s *ProjectService) CreateNewProject(req dtos.CreateProjectRequest) (*dtos.
 		if diagramType == "ui_design" {
 			title = "Untitled UI Canvas"
 		}
-		project, err := s.projectModel.Create(title, diagramType, json.RawMessage("[]"), json.RawMessage("[]"))
+		project, err := s.projectModel.CreateWithUser(userID, title, diagramType, "diagram", json.RawMessage("{}"), json.RawMessage("[]"), json.RawMessage("[]"))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create blank project: %w", err)
 		}
@@ -108,7 +112,7 @@ func (s *ProjectService) CreateNewProject(req dtos.CreateProjectRequest) (*dtos.
 
 	title := generateTitle(prompt)
 
-	project, err := s.projectModel.Create(title, diagramType, json.RawMessage("[]"), json.RawMessage("[]"))
+	project, err := s.projectModel.CreateWithUser(userID, title, diagramType, "diagram", json.RawMessage("{}"), json.RawMessage("[]"), json.RawMessage("[]"))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create project: %w", err)
 	}
@@ -178,6 +182,10 @@ func (s *ProjectService) CreateNewProject(req dtos.CreateProjectRequest) (*dtos.
 }
 
 func (s *ProjectService) SendChatMessage(projectID string, req dtos.ChatRequest) (*dtos.ProjectResponse, error) {
+	return s.SendChatMessageScoped(projectID, req, "")
+}
+
+func (s *ProjectService) SendChatMessageScoped(projectID string, req dtos.ChatRequest, userID string) (*dtos.ProjectResponse, error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, fmt.Errorf("project id is required")
@@ -188,9 +196,9 @@ func (s *ProjectService) SendChatMessage(projectID string, req dtos.ChatRequest)
 		return nil, fmt.Errorf("prompt is required")
 	}
 
-	project, history, err := s.projectModel.GetByID(projectID)
+	project, history, err := s.projectModel.GetByIDScoped(projectID, userID, "")
 	if err != nil {
-		return nil, fmt.Errorf("project not found: %w", err)
+		return nil, fmt.Errorf("project not found or unauthorized: %w", err)
 	}
 
 	var targetIDsJSON json.RawMessage
@@ -271,14 +279,24 @@ func (s *ProjectService) SendChatMessage(projectID string, req dtos.ChatRequest)
 		)
 	}
 
-	return s.GetProjectByID(projectID)
+	return s.GetProjectByIDScoped(projectID, userID, "")
 }
 
 func (s *ProjectService) RollbackToVersion(projectID, versionID string) (*dtos.ProjectResponse, error) {
+	return s.RollbackToVersionScoped(projectID, versionID, "")
+}
+
+func (s *ProjectService) RollbackToVersionScoped(projectID, versionID, userID string) (*dtos.ProjectResponse, error) {
 	projectID = strings.TrimSpace(projectID)
 	versionID = strings.TrimSpace(versionID)
 	if projectID == "" || versionID == "" {
 		return nil, fmt.Errorf("project_id and version_id are required")
+	}
+
+	if userID != "" {
+		if _, _, err := s.projectModel.GetByIDScoped(projectID, userID, ""); err != nil {
+			return nil, fmt.Errorf("project not found or unauthorized: %w", err)
+		}
 	}
 
 	if s.versionModel == nil {
@@ -315,13 +333,23 @@ func (s *ProjectService) RollbackToVersion(projectID, versionID string) (*dtos.P
 		nil,
 	)
 
-	return s.GetProjectByID(projectID)
+	return s.GetProjectByIDScoped(projectID, userID, "")
 }
 
 func (s *ProjectService) GetProjectVersions(projectID string) ([]dtos.DiagramVersionDTO, error) {
+	return s.GetProjectVersionsScoped(projectID, "")
+}
+
+func (s *ProjectService) GetProjectVersionsScoped(projectID, userID string) ([]dtos.DiagramVersionDTO, error) {
 	projectID = strings.TrimSpace(projectID)
 	if projectID == "" {
 		return nil, fmt.Errorf("project id is required")
+	}
+
+	if userID != "" {
+		if _, _, err := s.projectModel.GetByIDScoped(projectID, userID, ""); err != nil {
+			return nil, fmt.Errorf("project not found or unauthorized: %w", err)
+		}
 	}
 
 	if s.versionModel == nil {
@@ -375,12 +403,16 @@ func (s *ProjectService) ListTemplates() ([]dtos.TemplateDTO, error) {
 }
 
 func (s *ProjectService) GetProjectByID(id string) (*dtos.ProjectResponse, error) {
+	return s.GetProjectByIDScoped(id, "", "")
+}
+
+func (s *ProjectService) GetProjectByIDScoped(id, userID, userRole string) (*dtos.ProjectResponse, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, fmt.Errorf("project id is required")
 	}
 
-	project, messages, err := s.projectModel.GetByID(id)
+	project, messages, err := s.projectModel.GetByIDScoped(id, userID, userRole)
 	if err != nil {
 		return nil, err
 	}
@@ -411,7 +443,24 @@ func (s *ProjectService) GetProjectByID(id string) (*dtos.ProjectResponse, error
 	}, nil
 }
 
+func (s *ProjectService) UpdateProjectGraphScoped(id, userID string, nodes, edges json.RawMessage) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("project id is required")
+	}
+
+	if _, _, err := s.projectModel.GetByIDScoped(id, userID, ""); err != nil {
+		return fmt.Errorf("project not found or unauthorized: %w", err)
+	}
+
+	return s.projectModel.UpdateGraph(id, nodes, edges)
+}
+
 func (s *ProjectService) ListProjects(limit, offset int) (*dtos.PaginatedProjectsResponse, error) {
+	return s.ListProjectsForUser("", limit, offset)
+}
+
+func (s *ProjectService) ListProjectsForUser(userID string, limit, offset int) (*dtos.PaginatedProjectsResponse, error) {
 	if limit <= 0 {
 		limit = 15
 	}
@@ -419,7 +468,7 @@ func (s *ProjectService) ListProjects(limit, offset int) (*dtos.PaginatedProject
 		offset = 0
 	}
 
-	summaries, totalCount, err := s.projectModel.GetPaginated(limit, offset)
+	summaries, totalCount, err := s.projectModel.GetPaginatedScoped(userID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -449,9 +498,19 @@ func (s *ProjectService) ListProjects(limit, offset int) (*dtos.PaginatedProject
 }
 
 func (s *ProjectService) ToggleProjectPin(id string) (*dtos.TogglePinResponse, error) {
+	return s.ToggleProjectPinScoped(id, "")
+}
+
+func (s *ProjectService) ToggleProjectPinScoped(id, userID string) (*dtos.TogglePinResponse, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil, fmt.Errorf("project id is required")
+	}
+
+	if userID != "" {
+		if _, _, err := s.projectModel.GetByIDScoped(id, userID, ""); err != nil {
+			return nil, fmt.Errorf("project not found or unauthorized: %w", err)
+		}
 	}
 
 	isPinned, err := s.projectModel.TogglePin(id)

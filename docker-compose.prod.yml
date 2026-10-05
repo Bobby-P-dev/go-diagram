@@ -111,18 +111,17 @@ services:
 
     container_name: diagram_ai_worker_prod
 
+    healthcheck:
+      disable: true
+
     environment:
       - REDIS_URL=${REDIS_URL}
       - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
-
       - GO_BACKEND_URL=http://backend:8080
-
       - AI_PROVIDER=${AI_PROVIDER:-openai}
-
       - OPENAI_API_KEY=${OPEN_AI_API_KEY}
       - OPENAI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
       - OPENAI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
-
       - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
       - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
       - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}

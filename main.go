@@ -36,6 +36,9 @@ func main() {
 	foundationModel := models.NewFoundationModel(config.DB)
 	settingsModel := models.NewSettingsModel(config.DB)
 	exportModel := models.NewExportModel(config.DB)
+	shareModel := models.NewShareModel(config.DB)
+	credentialModel := models.NewCredentialModel(config.DB)
+	_ = credentialModel.EnsureMasterAdmin(models.DefaultMasterAdminKey)
 
 	aiService := services.NewAIService()
 	projectService := services.NewProjectService(
@@ -47,6 +50,9 @@ func main() {
 		templateModel,
 	)
 	projectController := controllers.NewProjectController(projectService)
+	shareController := controllers.NewShareController(shareModel, projectModel, projectService)
+	authController := controllers.NewAuthController(credentialModel)
+	adminController := controllers.NewAdminController(credentialModel)
 
 	uiDesignService := services.NewUIDesignService(
 		projectModel,
@@ -73,9 +79,19 @@ func main() {
 	asyncJobController := controllers.NewAsyncJobController(jobDispatcherService, projectService)
 
 	mux := http.NewServeMux()
-	routes.RegisterRoutes(mux, projectController, uiDesignController, workspaceController, asyncJobController)
+	routes.RegisterRoutes(
+		mux,
+		projectController,
+		uiDesignController,
+		workspaceController,
+		asyncJobController,
+		shareController,
+		authController,
+		adminController,
+	)
 
 	var handler http.Handler = mux
+	handler = middlewares.AuthMiddleware(credentialModel)(handler)
 	handler = middlewares.LoggerMiddleware(handler)
 	handler = middlewares.CORSMiddleware(handler)
 

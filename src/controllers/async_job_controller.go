@@ -7,6 +7,7 @@ import (
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/config"
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
+	"github.com/Bobby-P-dev/go-diagram.git/src/middlewares"
 	"github.com/Bobby-P-dev/go-diagram.git/src/services"
 	"github.com/Bobby-P-dev/go-diagram.git/src/utils"
 )
@@ -27,6 +28,12 @@ func NewAsyncJobController(
 }
 
 func (c *AsyncJobController) CreateAsyncUIDesign(w http.ResponseWriter, r *http.Request) {
+	user := middlewares.GetUserFromContext(r.Context())
+	if user != nil && !user.CanGenerateUI {
+		utils.RespondError(w, http.StatusForbidden, "Akses Ditolak", "Kredensial Anda tidak memiliki izin untuk fitur Desain Antarmuka (UI).")
+		return
+	}
+
 	var req dtos.CreateUIDesignRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		utils.RespondError(w, http.StatusBadRequest, "Invalid JSON payload", err.Error())
