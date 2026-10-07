@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 
@@ -52,6 +53,54 @@ func (c *UIDesignController) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondJSON(w, http.StatusCreated, "UI design created successfully", result)
+}
+
+func (c *UIDesignController) CreateStream(w http.ResponseWriter, r *http.Request) {
+	user := middlewares.GetUserFromContext(r.Context())
+	if user != nil && !user.CanGenerateUI {
+		utils.RespondError(w, http.StatusForbidden, "Akses Ditolak", "Kredensial Anda tidak memiliki izin untuk fitur Desain Antarmuka (UI).")
+		return
+	}
+
+	var req dtos.CreateUIDesignRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("[UIDesignController.CreateStream] Decode error: %v", err)
+		utils.RespondError(w, http.StatusBadRequest, "Invalid request body", err.Error())
+		return
+	}
+	defer r.Body.Close()
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		result, err := c.service.GenerateUIDesign(r.Context(), req)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "Failed to generate UI design", err.Error())
+			return
+		}
+		utils.RespondJSON(w, http.StatusCreated, "UI design created successfully", result)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	sendSSE := func(eventType string, data any) {
+		dataBytes, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(dataBytes))
+		flusher.Flush()
+	}
+
+	_, err := c.service.GenerateUIDesignStream(r.Context(), req, sendSSE)
+	if err != nil {
+		log.Printf("[UIDesignController.CreateStream] Service error: %v", err)
+		sendSSE("error", map[string]string{
+			"message": err.Error(),
+		})
+	}
 }
 
 func (c *UIDesignController) Chat(w http.ResponseWriter, r *http.Request) {

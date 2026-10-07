@@ -111,12 +111,13 @@ class DesignSpecificationDTO(BaseModel):
     states: Optional[List[str]] = None
 
 class AntiSlopAuditDTO(BaseModel):
-    zero_ornamental_gradients: bool = True
-    zero_fake_blobs: bool = True
-    zero_lorem_ipsum: bool = True
-    zero_unrequested_features: bool = True
-    subtle_borders_only: bool = True
-    wcag_contrast_passed: bool = True
+    status: str = "unverified"
+    zero_ornamental_gradients: Optional[bool] = None
+    zero_fake_blobs: Optional[bool] = None
+    zero_lorem_ipsum: Optional[bool] = None
+    zero_unrequested_features: Optional[bool] = None
+    subtle_borders_only: Optional[bool] = None
+    wcag_contrast_passed: Optional[bool] = None
     verified_rules: List[str] = []
 
 class PageSpecificationDTO(BaseModel):
@@ -187,15 +188,15 @@ class VisualIssueDTO(BaseModel):
     fix_direction: str = Field(description="Concrete actionable instruction to resolve the defect")
 
 class VisualCritiqueDTO(BaseModel):
-    status: str = Field(description="pass | revise")
-    composition_score: float = Field(default=8.5, description="Score 0.0 - 10.0")
-    visual_hierarchy_score: float = Field(default=8.5)
-    whitespace_balance_score: float = Field(default=8.5)
-    distinctiveness_score: float = Field(default=8.5)
-    overall_visual_score: float = Field(default=8.5)
+    status: str = Field(description="pass | revise | unavailable")
+    composition_score: Optional[float] = Field(default=None, ge=0, le=10)
+    visual_hierarchy_score: Optional[float] = Field(default=None, ge=0, le=10)
+    whitespace_balance_score: Optional[float] = Field(default=None, ge=0, le=10)
+    distinctiveness_score: Optional[float] = Field(default=None, ge=0, le=10)
+    overall_visual_score: Optional[float] = Field(default=None, ge=0, le=10)
     has_excessive_empty_space: bool = False
     has_generic_template_feel: bool = False
-    critique_summary: str = "Visual composition meets high quality standards."
+    critique_summary: str = "Visual review has not been performed."
     issues: List[VisualIssueDTO] = []
 
 class ReferenceAnalysisDTO(BaseModel):
@@ -219,6 +220,20 @@ class UIFrameSynthesisDTO(BaseModel):
     theme: Dict[str, Any]
     sections: List[UISectionDTO] = []
     raw_html: Optional[str] = None
+
+class PromptDesignBriefDTO(BaseModel):
+    """Prompt-specific decisions, without prescribing a reusable page template."""
+    page_type: str
+    domain: str
+    language: str
+    primary_task: str
+    required_content: List[str]
+    excluded_content: List[str] = []
+    visual_direction: str
+    layout_strategy: str
+    typography: Dict[str, str]
+    theme: Dict[str, Any]
+    sections: List[UISectionDTO]
 
 class VisualPatchResultDTO(BaseModel):
     raw_html: str
@@ -246,6 +261,7 @@ class UIFrameData(BaseModel):
     anti_slop_audit: Optional[AntiSlopAuditDTO] = None
     requirement_spec: Optional[RequirementSpecificationDTO] = None
     execution_trace: Optional[Dict[str, Any]] = None
+    design_brief: Optional[PromptDesignBriefDTO] = None
 
 class UIDesignDSL(BaseModel):
     frames: List[UIFrameData]

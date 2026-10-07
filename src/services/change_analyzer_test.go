@@ -7,207 +7,149 @@ import (
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
 )
 
-// TEST 6: "buat tombol menjadi lebih kecil" -> STYLE, PATCH, button target, component scope
-func TestBenchmark6_ButtonSizeSmaller(t *testing.T) {
-	analyzer := NewChangeAnalyzer(nil)
-	ctx := context.Background()
-
-	currentFrame := &dtos.UIFrameData{
-		Device: "web",
-		Title:  "Login Minimalis",
-		Sections: []dtos.UISectionDTO{
-			{
-				ID:   "sec-auth-form",
-				Type: "form",
-				Data: map[string]interface{}{
-					"title":       "Masuk",
-					"submit_size": "standard",
-				},
-			},
-		},
+func TestChangeAnalyzerDetectsInsertFrame(t *testing.T) {
+	analyzer := &ChangeAnalyzer{}
+	cases := []struct {
+		name     string
+		req      string
+		pageType string
+		device   string
+	}{
+		{"pricing-mobile", "tambah halaman pricing mobile", "pricing", "mobile"},
+		{"pricing-web", "tambah halaman pricing", "pricing", "web"},
+		{"register", "buat screen register", "register", "web"},
+		{"register-mobile", "buat screen register mobile", "register", "mobile"},
+		{"dashboard-desktop", "buat halaman dashboard desktop", "dashboard", "desktop"},
+		{"landing", "tambah frame landing", "landing", "web"},
+		// Natural Indonesian affixes (-kan, -nya) & word order variations
+		{"user-reported-login-suffix", "tambahkan halaman loginnya yang minimalis tetapi modern", "login", "web"},
+		{"tambahkan-halaman-loginnya", "tambahkan halaman loginnya", "login", "web"},
+		{"tambahkan-halaman-login", "tambahkan halaman login", "login", "web"},
+		{"buatkan-screen-register", "buatkan screen register", "register", "web"},
+		{"tambah-login-page", "tambah login page", "login", "web"},
+		{"buatkan-login-screen", "buatkan login screen", "login", "web"},
+		{"bikin-page-checkout", "bikin page checkout", "checkout", "web"},
+		{"halaman-baru-profil", "halaman baru untuk profil", "profile", "web"},
+		{"tambah-1-halaman-lagi", "tambah 1 halaman lagi", "new_page", "web"},
+		{"screen-baru-mobile", "screen baru untuk checkout mobile", "checkout", "mobile"},
 	}
-
-	plan, err := analyzer.AnalyzeChange(ctx, "buat tombol login lebih kecil", currentFrame)
-	if err != nil {
-		t.Fatalf("AnalyzeChange error: %v", err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := analyzer.AnalyzeTargetedChange(context.Background(), tc.req, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if plan.Operation != dtos.OpInsertFrame {
+				t.Fatalf("expected operation INSERT_FRAME, got %q (strategy=%s)", plan.Operation, plan.Strategy)
+			}
+			if plan.Strategy != "insert_frame" {
+				t.Fatalf("expected strategy insert_frame, got %q", plan.Strategy)
+			}
+			if tc.pageType != "" && plan.Target.SectionID != tc.pageType {
+				t.Fatalf("expected page type %q, got %q", tc.pageType, plan.Target.SectionID)
+			}
+			if plan.Target.Device != tc.device {
+				t.Fatalf("expected device %q, got %q", tc.device, plan.Target.Device)
+			}
+			if plan.Scope != "project" || plan.PreserveOutsideTarget != true {
+				t.Fatalf("expected scope=project and preserve_outside_target=true, got scope=%s preserve=%v", plan.Scope, plan.PreserveOutsideTarget)
+			}
+		})
 	}
-
-	if plan.Classification != "style" {
-		t.Errorf("Expected classification 'style', got '%s'", plan.Classification)
-	}
-	if plan.Strategy != "patch" {
-		t.Errorf("Expected strategy 'patch', got '%s'", plan.Strategy)
-	}
-	if plan.Regenerate != false {
-		t.Errorf("Expected regenerate false, got true")
-	}
-	if plan.Target.Component != "button" {
-		t.Errorf("Expected target component 'button', got '%s'", plan.Target.Component)
-	}
-
-	// Test PatchEngine execution
-	engine := NewPatchEngine()
-	patched, explanation, err := engine.ApplyPatch(currentFrame, plan)
-	if err != nil {
-		t.Fatalf("ApplyPatch error: %v", err)
-	}
-
-	formSec := patched.Sections[0]
-	if formSec.Data["submit_size"] != "small" {
-		t.Errorf("Expected submit_size 'small', got '%v'", formSec.Data["submit_size"])
-	}
-	if patched.ChangePlan == nil {
-		t.Errorf("Expected ChangePlan attached to frame")
-	}
-	t.Logf("Test 6 passed. Explanation: %s", explanation)
 }
 
-// TEST 7: "ubah warna primary menjadi hitam" -> STYLE, PATCH, token update
-func TestBenchmark7_ColorPrimaryBlack(t *testing.T) {
-	analyzer := NewChangeAnalyzer(nil)
-	ctx := context.Background()
-
-	plan, err := analyzer.AnalyzeChange(ctx, "ubah warna primary menjadi hitam", nil)
-	if err != nil {
-		t.Fatalf("AnalyzeChange error: %v", err)
+func TestChangeAnalyzerDetectsSectionOperations(t *testing.T) {
+	analyzer := &ChangeAnalyzer{}
+	cases := []struct {
+		name      string
+		req       string
+		op        dtos.OperationType
+		targetSec string
+	}{
+		{"buatkan-section", "buatkan section untuk testimoni", dtos.OpInsertSection, ""},
+		{"tambah-section-setelah", "tambahkan section faq setelah hero", dtos.OpInsertSection, "hero"},
+		{"buatkan-timeline-natural", "buatkan juga untuk menu timeline nya di sesuaikan dengan design yang sudah ada saat ini", dtos.OpInsertSection, ""},
+		{"tambah-timeline", "tambahkan timeline", dtos.OpInsertSection, ""},
+		{"buatkan-menu-timeline", "buatkan menu timeline", dtos.OpInsertSection, ""},
+		{"hapus-section", "hapus section testimonial", dtos.OpDeleteSection, "sec-testimonial"},
 	}
-
-	if plan.Classification != "style" {
-		t.Errorf("Expected classification 'style', got '%s'", plan.Classification)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := analyzer.AnalyzeTargetedChange(context.Background(), tc.req, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if plan.Operation != tc.op {
+				t.Fatalf("expected operation %s, got %s", tc.op, plan.Operation)
+			}
+			if tc.targetSec != "" && plan.Target.SectionID != tc.targetSec {
+				t.Fatalf("expected target section %s, got %s", tc.targetSec, plan.Target.SectionID)
+			}
+		})
 	}
-	if plan.Strategy != "patch" {
-		t.Errorf("Expected strategy 'patch', got '%s'", plan.Strategy)
-	}
-	if plan.Regenerate != false {
-		t.Errorf("Expected regenerate false, got true")
-	}
-
-	// Test PatchEngine
-	frame := &dtos.UIFrameData{
-		Theme: map[string]interface{}{"mode": "dark", "primary": "#6366f1"},
-	}
-	engine := NewPatchEngine()
-	patched, _, err := engine.ApplyPatch(frame, plan)
-	if err != nil {
-		t.Fatalf("ApplyPatch error: %v", err)
-	}
-
-	if patched.Theme["primary"] != "#000000" {
-		t.Errorf("Expected primary color '#000000', got '%v'", patched.Theme["primary"])
-	}
-	t.Log("Test 7 passed.")
 }
 
-// TEST 8: "pindahkan form ke kanan" -> LAYOUT, target form
-func TestBenchmark8_MoveFormRight(t *testing.T) {
-	analyzer := NewChangeAnalyzer(nil)
-	ctx := context.Background()
-
-	plan, err := analyzer.AnalyzeChange(ctx, "form login pindahkan ke sebelah kanan", nil)
-	if err != nil {
-		t.Fatalf("AnalyzeChange error: %v", err)
+func TestChangeAnalyzerDoesNotMisclassifyPatchesAsInsertFrame(t *testing.T) {
+	analyzer := &ChangeAnalyzer{}
+	patches := []string{
+		"ubah judul section hero menjadi X",
+		"buat tombol login lebih kecil",
+		"tambah section pricing setelah hero",
+		"ubah login page menjadi dashboard admin",
+		"pindahkan form ke kanan",
+		"tambahkan tombol login di halaman ini",
+		"tambahkan input email ke form",
 	}
-
-	if plan.Classification != "layout" {
-		t.Errorf("Expected classification 'layout', got '%s'", plan.Classification)
+	for _, req := range patches {
+		plan, err := analyzer.AnalyzeTargetedChange(context.Background(), req, nil, nil, nil)
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", req, err)
+		}
+		if plan.Operation == dtos.OpInsertFrame {
+			t.Fatalf("patch %q must NOT be classified as INSERT_FRAME (got strategy=%s op=%s)", req, plan.Strategy, plan.Operation)
+		}
 	}
-	if plan.Strategy != "patch" {
-		t.Errorf("Expected strategy 'patch', got '%s'", plan.Strategy)
-	}
-	if plan.Target.Section != "form" {
-		t.Errorf("Expected target section 'form', got '%s'", plan.Target.Section)
-	}
-	t.Log("Test 8 passed.")
 }
 
-// TEST 9: "ubah seluruh desain menjadi dark mode" -> GLOBAL_STYLE
-func TestBenchmark9_GlobalDarkMode(t *testing.T) {
-	analyzer := NewChangeAnalyzer(nil)
-	ctx := context.Background()
-
-	plan, err := analyzer.AnalyzeChange(ctx, "ubah seluruh desain menjadi dark mode", nil)
+func TestChangeAnalyzerTimelineWithSelectedProductTarget(t *testing.T) {
+	analyzer := &ChangeAnalyzer{}
+	req := "buatkan juga untuk menu timeline nya di sesuaikan dengan design yang sudah ada saat ini"
+	targetRef := &dtos.TargetElementRefDTO{
+		Type: "section",
+		ID:   "sec-products",
+	}
+	plan, err := analyzer.AnalyzeTargetedChange(context.Background(), req, targetRef, nil, nil)
 	if err != nil {
-		t.Fatalf("AnalyzeChange error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if plan.Classification != "global_style" {
-		t.Errorf("Expected classification 'global_style', got '%s'", plan.Classification)
+	if plan.Operation != dtos.OpInsertSection {
+		t.Fatalf("expected OpInsertSection, got %s", plan.Operation)
 	}
-	if plan.Strategy != "patch" {
-		t.Errorf("Expected strategy 'patch', got '%s'", plan.Strategy)
+	if plan.Strategy != "insert_section" {
+		t.Fatalf("expected strategy insert_section, got %s", plan.Strategy)
 	}
-
-	frame := &dtos.UIFrameData{
-		Theme: map[string]interface{}{"mode": "light", "primary": "#6366f1"},
+	if plan.Target.SectionID != "sec-products" {
+		t.Fatalf("expected target anchor sec-products, got %s", plan.Target.SectionID)
 	}
-	engine := NewPatchEngine()
-	patched, _, err := engine.ApplyPatch(frame, plan)
-	if err != nil {
-		t.Fatalf("ApplyPatch error: %v", err)
-	}
-	if patched.Theme["mode"] != "dark" {
-		t.Errorf("Expected theme mode 'dark', got '%v'", patched.Theme["mode"])
-	}
-	t.Log("Test 9 passed.")
 }
 
-// TEST 10: "ubah login page menjadi dashboard admin" -> STRUCTURAL / PAGE_REBUILD
-func TestBenchmark10_LoginToDashboardRebuild(t *testing.T) {
-	analyzer := NewChangeAnalyzer(nil)
-	ctx := context.Background()
-
-	plan, err := analyzer.AnalyzeChange(ctx, "ubah login page ini menjadi dashboard admin", nil)
+func TestChangeAnalyzerExplicitNewScreenScope(t *testing.T) {
+	analyzer := &ChangeAnalyzer{}
+	req := "buatkan juga untuk menu timeline nya di sesuaikan dengan design yang sudah ada saat ini"
+	selCtx := &dtos.SelectionContextDTO{
+		Scope: "new_screen",
+	}
+	plan, err := analyzer.AnalyzeTargetedChange(context.Background(), req, nil, selCtx, nil)
 	if err != nil {
-		t.Fatalf("AnalyzeChange error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if plan.Classification != "structural" {
-		t.Errorf("Expected classification 'structural', got '%s'", plan.Classification)
+	if plan.Operation != dtos.OpInsertFrame {
+		t.Fatalf("expected OpInsertFrame when scope is new_screen, got %s", plan.Operation)
 	}
-	if plan.Strategy != "rebuild" {
-		t.Errorf("Expected strategy 'rebuild', got '%s'", plan.Strategy)
+	if plan.Strategy != "insert_frame" {
+		t.Fatalf("expected strategy insert_frame, got %s", plan.Strategy)
 	}
-	if plan.Regenerate != true {
-		t.Errorf("Expected regenerate true, got false")
+	if plan.Target.SectionID != "timeline" {
+		t.Fatalf("expected page type timeline, got %s", plan.Target.SectionID)
 	}
-	t.Log("Test 10 passed.")
-}
-
-// TEST: Feature addition - Google login added explicitly
-func TestBenchmark_AddGoogleLogin(t *testing.T) {
-	analyzer := NewChangeAnalyzer(nil)
-	ctx := context.Background()
-
-	plan, err := analyzer.AnalyzeChange(ctx, "tambahkan login dengan Google", nil)
-	if err != nil {
-		t.Fatalf("AnalyzeChange error: %v", err)
-	}
-
-	if plan.Classification != "functionality" {
-		t.Errorf("Expected classification 'functionality', got '%s'", plan.Classification)
-	}
-	if plan.Strategy != "patch" {
-		t.Errorf("Expected strategy 'patch', got '%s'", plan.Strategy)
-	}
-
-	frame := &dtos.UIFrameData{
-		Sections: []dtos.UISectionDTO{
-			{
-				Type: "form",
-				Data: map[string]interface{}{
-					"title": "Masuk",
-				},
-			},
-		},
-	}
-	engine := NewPatchEngine()
-	patched, _, err := engine.ApplyPatch(frame, plan)
-	if err != nil {
-		t.Fatalf("ApplyPatch error: %v", err)
-	}
-	socialBtns, ok := patched.Sections[0].Data["social_buttons"].([]string)
-	if !ok || len(socialBtns) == 0 || socialBtns[0] != "Google" {
-		t.Errorf("Expected social_buttons to contain Google, got %v", patched.Sections[0].Data["social_buttons"])
-	}
-	t.Log("Add Google login test passed.")
 }

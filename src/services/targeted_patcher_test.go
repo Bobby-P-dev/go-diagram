@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -292,3 +293,98 @@ func TestTargetedPatcher_ZeroFalseSuccess(t *testing.T) {
 		t.Fatalf("expected error for empty target, but got nil (false success)")
 	}
 }
+
+func TestTargetedPatcher_UnmarshalFrameWithDesignDecisionsArray(t *testing.T) {
+	jsonBlob := `{"title":"Test Page","device":"web","raw_html":"<div class=\"min-h-screen\"><section data-rl-id=\"sec-hero\">Hero</section></div>","design_decisions":[{"id":"dec-1","decision":"layout","reason":"optimal","source":"design_system"}]}`
+	var frame dtos.UIFrameData
+	if err := json.Unmarshal([]byte(jsonBlob), &frame); err != nil {
+		t.Fatalf("Failed to unmarshal frame with design_decisions array: %v", err)
+	}
+	if frame.Title != "Test Page" {
+		t.Errorf("expected title 'Test Page', got %s", frame.Title)
+	}
+
+	patcher := NewTargetedPatcher(nil)
+	plan := &dtos.ChangePlanDTO{
+		Request:   "buatkan juga untuk menu timeline nya di sesuaikan dengan design yang sudah ada saat ini",
+		Operation: dtos.OpInsertSection,
+		Strategy:  "insert_section",
+		Target: dtos.TargetElementDTO{
+			Type: "section",
+			ID:   "",
+		},
+	}
+	patched, exp, err := patcher.ApplyTargetedPatch(context.Background(), &frame, plan)
+	if err != nil {
+		t.Fatalf("ApplyTargetedPatch failed: %v", err)
+	}
+	if !strings.Contains(patched.RawHtml, "sec-") {
+		t.Errorf("expected inserted section, got %s", patched.RawHtml)
+	}
+	t.Logf("Success: %s", exp)
+}
+
+func sampleSidebarAcmeHTML() string {
+	return `<div class="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased flex flex-col xl:flex-row">
+   <!-- Collapsible Minimal Enterprise Sidebar -->
+   <aside data-rl-id="sec-sidebar" data-rl-kind="section" class="w-full xl:w-64 bg-white border-b xl:border-b-0 xl:border-r border-slate-200 flex flex-col shrink-0 select-none">
+     <!-- Workspace Selector & Logo -->
+     <div class="h-16 px-4 flex items-center justify-between border-b border-slate-100">
+       <div class="flex items-center gap-2.5">
+         <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-semibold text-sm shadow-sm shadow-indigo-200">
+           <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2L2 7l10 5 10-5-10-5z"/></svg>
+         </div>
+         <div>
+           <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Internal Ops</div>
+           <div class="text-sm font-semibold text-slate-800 leading-none mt-0.5">Acme Corp <span class="text-[10px] font-mono font-medium px-1.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200/60 rounded">PROD</span></div>
+         </div>
+       </div>
+       <button class="text-slate-400 hover:text-slate-600">...</button>
+     </div>
+     <nav class="p-3">
+       <a href="#dashboard" class="block px-3 py-2 rounded-lg bg-indigo-50 text-indigo-700 font-medium">Dashboard</a>
+     </nav>
+   </aside>
+   <main class="flex-1 p-6">
+     <h1 class="text-2xl font-bold">Workspace Overview</h1>
+   </main>
+ </div>`
+}
+
+func TestExtractBrandSnippet_Sidebar(t *testing.T) {
+	html := sampleSidebarAcmeHTML()
+	navSnip, _, _, err := findElementSnippet(html, "sec-sidebar")
+	if err != nil {
+		t.Fatalf("expected to find sec-sidebar, got err: %v", err)
+	}
+
+	brandSnip := extractBrandSnippet(html, navSnip)
+	if brandSnip == "" {
+		t.Fatalf("expected non-empty brand snippet")
+	}
+
+	if !strings.Contains(brandSnip, "Internal Ops") {
+		t.Errorf("expected brand snippet to contain 'Internal Ops', got: %s", brandSnip)
+	}
+	if !strings.Contains(brandSnip, "Acme Corp") {
+		t.Errorf("expected brand snippet to contain 'Acme Corp', got: %s", brandSnip)
+	}
+}
+
+func TestExtractBrandSnippet_Header(t *testing.T) {
+	html := sampleBakeryHTML()
+	navSnip, _, _, err := findElementSnippet(html, "sec-header")
+	if err != nil {
+		t.Fatalf("expected to find sec-header, got err: %v", err)
+	}
+
+	brandSnip := extractBrandSnippet(html, navSnip)
+	if brandSnip == "" {
+		t.Fatalf("expected non-empty brand snippet")
+	}
+
+	if !strings.Contains(brandSnip, "Ann's Bakehouse") {
+		t.Errorf("expected brand snippet to contain \"Ann's Bakehouse\", got: %s", brandSnip)
+	}
+}
+

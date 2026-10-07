@@ -2,8 +2,8 @@ package config
 
 import (
 	"log"
-	"net"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -25,6 +25,7 @@ type EnvConfig struct {
 	OpenAIAPIKey            string
 	OpenAIMBaseURL          string
 	OpenAIModel             string
+	AIMaxTokens             int
 	RedisURL                string
 	InternalServiceKey      string
 	OrchestrationServiceURL string
@@ -33,9 +34,12 @@ type EnvConfig struct {
 var Env *EnvConfig
 
 func LoadEnv() {
-	err := godotenv.Load()
-	if err != nil {
-		log.Println("Warning: .env file not found, using system environment variables")
+	if err := godotenv.Load(); err != nil {
+		if err2 := godotenv.Load("../../.env"); err2 != nil {
+			if err3 := godotenv.Load("../.env"); err3 != nil {
+				log.Println("Warning: .env file not found, using system environment variables")
+			}
+		}
 	}
 
 	Env = &EnvConfig{
@@ -51,16 +55,17 @@ func LoadEnv() {
 		AnthropicModel:     getEnv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
 		AnthropicBaseURL:   getEnv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1/messages"),
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
-		OpenAIAPIKey:       getEnvAny([]string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY"}, "sk-e0a1cf47f9c53ece-y50fyg-b2f36942"),
-		OpenAIMBaseURL:     getEnvAny([]string{"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL"}, "https://9router.bby-dev.tech/v1"),
-		OpenAIModel:             getEnvAny([]string{"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL"}, "cx/gpt-5.6-sol"),
+		OpenAIAPIKey:       getEnvAny([]string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY"}, "sk-27534e0917d892bb-z0aum1-3e0637a7"),
+		OpenAIMBaseURL:     getEnvAny([]string{"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL"}, "http://localhost:20128/v1"),
+		OpenAIModel:             getEnvAny([]string{"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL"}, "ag/gemini-3.8-flash"),
+		AIMaxTokens:             getEnvInt("AI_MAX_TOKENS", 28000),
 		RedisURL:                getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		InternalServiceKey:      getEnv("INTERNAL_SERVICE_KEY", "secret-internal-key-project-diagram"),
 		OrchestrationServiceURL: getEnv("ORCHESTRATION_SERVICE_URL", "http://localhost:8000"),
 	}
 
-	// Auto-replace localhost with host.docker.internal only if host.docker.internal is resolvable (bridge mode)
-	if _, err := net.LookupHost("host.docker.internal"); err == nil {
+	// Auto-replace localhost with host.docker.internal only if host.docker.internal is explicitly present in /etc/hosts (bridge mode)
+	if hostsData, err := os.ReadFile("/etc/hosts"); err == nil && strings.Contains(string(hostsData), "host.docker.internal") {
 		if strings.Contains(Env.OpenAIMBaseURL, "localhost") {
 			Env.OpenAIMBaseURL = strings.ReplaceAll(Env.OpenAIMBaseURL, "localhost", "host.docker.internal")
 		}
@@ -78,6 +83,17 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvInt(key string, fallback int) int {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	if n, err := strconv.Atoi(value); err == nil && n > 0 {
+		return n
+	}
+	return fallback
 }
 
 func getEnvAny(keys []string, fallback string) string {

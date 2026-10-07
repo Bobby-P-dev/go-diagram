@@ -4,9 +4,9 @@ from pydantic import BaseModel, Field
 class JobDispatchPayload(BaseModel):
     raw_prompt: str
     device: str = Field(default="web", description="web | mobile | desktop")
-    foundation: str = Field(default="ramp", description="ramp | calcom | raycast | railway | attio | mintlify")
-    theme_mode: str = Field(default="dark", description="dark | light")
-    accent_color: str = Field(default="#6366f1")
+    foundation: str = Field(default="", description="Optional visual reference; empty means infer from the prompt")
+    theme_mode: str = Field(default="auto", description="auto | dark | light")
+    accent_color: str = Field(default="")
     complexity_ceiling: str = Field(default="moderate", description="simple | moderate | complex")
     constraints: Optional[Dict[str, Any]] = None
 

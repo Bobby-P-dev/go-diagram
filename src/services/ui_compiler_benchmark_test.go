@@ -172,13 +172,13 @@ func TestValidatorTraceabilityEnforcement(t *testing.T) {
 }
 
 // 3. UNIT TEST: UI Validator Complexity Bounding (Rule 3)
-func TestValidatorComplexityBounding(t *testing.T) {
+func TestValidatorMinimalPreservesRequestedSections(t *testing.T) {
 	validator := NewUIValidator()
 
 	reqSpec := &dtos.RequirementSpecificationDTO{
 		Page: dtos.RequirementPageDTO{
 			Type:       "homepage",
-			Complexity: "simple", // SIMPLE requires max 4 sections
+			Complexity: "simple", // Minimal styling preserves requested composition
 		},
 	}
 
@@ -196,8 +196,8 @@ func TestValidatorComplexityBounding(t *testing.T) {
 
 	_, validatedSpec := validator.ValidateAndAudit(reqSpec, designSpec)
 
-	if len(validatedSpec.Sections) > 4 {
-		t.Errorf("expected simple page to be bounded to max 4 sections, got %d", len(validatedSpec.Sections))
+	if len(validatedSpec.Sections) != 6 {
+		t.Errorf("expected all six grounded sections to survive minimal styling, got %d", len(validatedSpec.Sections))
 	}
 }
 
@@ -555,5 +555,3 @@ func TestLoginWithGoogleGitHubExplicit(t *testing.T) {
 		t.Logf("SUCCESS: 'buatkan login page dengan Google dan GitHub' preserved explicit social buttons!")
 	}
 }
-
-

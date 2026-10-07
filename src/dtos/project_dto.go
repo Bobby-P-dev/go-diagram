@@ -15,9 +15,10 @@ type TargetElementRefDTO struct {
 }
 
 type SelectionContextDTO struct {
-	Tag  string `json:"tag,omitempty"`  // "button", "header", "div"
-	Text string `json:"text,omitempty"` // "Pesan Online"
-	Role string `json:"role,omitempty"` // "button", "banner"
+	Tag   string `json:"tag,omitempty"`   // "button", "header", "div"
+	Text  string `json:"text,omitempty"`  // "Pesan Online"
+	Role  string `json:"role,omitempty"`  // "button", "banner"
+	Scope string `json:"scope,omitempty"` // "new_screen", "screen", "section", "component"
 }
 
 type ChatRequest struct {
@@ -138,11 +139,17 @@ type OpenAIError struct {
 
 type ChatResponseOpenAI struct {
 	Choices []struct {
-		Message struct {
+		FinishReason string `json:"finish_reason"`
+		Message      struct {
 			Role    string `json:"role"`
 			Content string `json:"content"`
 		} `json:"message"`
 	} `json:"choices"`
+	Usage struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage"`
 	Error *OpenAIError `json:"error,omitempty"`
 }
 

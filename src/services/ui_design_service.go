@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
@@ -17,6 +19,7 @@ type UIDesignServiceInterface interface {
 	GetTemplates(ctx context.Context) ([]entities.UITemplate, error)
 	CreateProjectFromTemplate(ctx context.Context, templateID string) (*dtos.ProjectResponse, error)
 	GenerateUIDesign(ctx context.Context, req dtos.CreateUIDesignRequest) (*dtos.ProjectResponse, error)
+	GenerateUIDesignStream(ctx context.Context, req dtos.CreateUIDesignRequest, onEvent func(eventType string, data any)) (*dtos.ProjectResponse, error)
 	IterateUIDesignWithChat(ctx context.Context, projectID, prompt string, targetedNodeIDs []string) (*dtos.ProjectResponse, error)
 	IterateUIDesignWithTargetedChat(ctx context.Context, projectID string, req *dtos.ChatRequest) (*dtos.ProjectResponse, error)
 }
@@ -31,6 +34,35 @@ type uiDesignService struct {
 	changeAnalyzer  *ChangeAnalyzer
 	patchEngine     *PatchEngine
 	targetedPatcher *TargetedPatcher
+}
+
+// Preserve automatic styling until the design brief can interpret the user's prompt.
+func resolveUIDesignThemeMode(req dtos.CreateUIDesignRequest) string {
+	if mode := strings.ToLower(strings.TrimSpace(req.ThemeMode)); mode != "" {
+		return mode
+	}
+	theme := strings.ToLower(strings.TrimSpace(req.Theme))
+	if strings.Contains(theme, "light") {
+		return "light"
+	}
+	if strings.Contains(theme, "dark") {
+		return "dark"
+	}
+	return "auto"
+}
+
+func buildUIDesignPrompt(req dtos.CreateUIDesignRequest) string {
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		return ""
+	}
+	if tone := strings.TrimSpace(req.CustomTone); tone != "" {
+		prompt += "\nRequested visual tone: " + tone
+	}
+	if context := strings.TrimSpace(req.ProductContext); context != "" {
+		prompt += "\nProduct context: " + context
+	}
+	return prompt
 }
 
 func NewUIDesignService(
@@ -163,6 +195,14 @@ func (s *uiDesignService) CreateProjectFromTemplate(ctx context.Context, templat
 }
 
 func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateUIDesignRequest) (*dtos.ProjectResponse, error) {
+	return s.GenerateUIDesignStream(ctx, req, nil)
+}
+
+func (s *uiDesignService) GenerateUIDesignStream(
+	ctx context.Context,
+	req dtos.CreateUIDesignRequest,
+	onEvent func(eventType string, data any),
+) (*dtos.ProjectResponse, error) {
 	if req.TemplateID != "" {
 		return s.CreateProjectFromTemplate(ctx, req.TemplateID)
 	}
@@ -177,23 +217,13 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 		theme = "Modern Custom"
 	}
 
-	themeMode := strings.ToLower(strings.TrimSpace(req.ThemeMode))
-	if themeMode == "" {
-		if strings.Contains(strings.ToLower(theme), "light") {
-			themeMode = "light"
-		} else {
-			themeMode = "dark"
-		}
-	}
+	themeMode := resolveUIDesignThemeMode(req)
 
 	accentColor := strings.TrimSpace(req.AccentColor)
 	foundation := strings.ToLower(strings.TrimSpace(req.Foundation))
 	productContext := strings.ToLower(strings.TrimSpace(req.ProductContext))
 
-	prompt := strings.TrimSpace(req.Prompt)
-	if customTone := strings.TrimSpace(req.CustomTone); customTone != "" && prompt != "" {
-		prompt = prompt + " (Tone: " + customTone + ")"
-	}
+	prompt := buildUIDesignPrompt(req)
 	if prompt == "" {
 		title := "Untitled UI Design"
 		nodesBytes := json.RawMessage("[]")
@@ -240,7 +270,7 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 			})
 		}
 
-		return &dtos.ProjectResponse{
+		blankResp := &dtos.ProjectResponse{
 			ID:           project.ID,
 			Title:        project.Title,
 			DiagramType:  project.DiagramType,
@@ -251,11 +281,131 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 			Messages:     msgs,
 			CreatedAt:    project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 			UpdatedAt:    project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		}, nil
-	}	// Compile UI Design through the 11-Layer AI Design Compiler
-	dsl, err := s.compiler.Compile(ctx, prompt, device, foundation, themeMode, accentColor)
+		}
+		if onEvent != nil {
+			onEvent("complete", blankResp)
+		}
+		return blankResp, nil
+	}
+
+	if onEvent != nil {
+		onEvent("status", map[string]string{
+			"stage":   "analyzing",
+			"message": "Menganalisis kebutuhan & arsitektur antarmuka...",
+		})
+	}
+
+	var onChunk LLMStreamCallback
+	if onEvent != nil {
+		tokenCounter := 0
+		charCounter := 0
+		lastEmitted := 0
+		var streamBuffer strings.Builder
+		var detectedSections []string
+		seenSections := make(map[string]bool)
+
+		secRegex := regexp.MustCompile(`"type":\s*"([a-zA-Z0-9_\-]+)"`)
+		secIdJsonRegex := regexp.MustCompile(`"id":\s*"(sec-[a-zA-Z0-9_\-]+)"`)
+		idRegex := regexp.MustCompile(`data-rl-id="([a-zA-Z0-9_\-]+)"`)
+
+		onChunk = func(delta string, tokens int) {
+			charCounter += len(delta)
+			streamBuffer.WriteString(delta)
+			if tokens > 0 {
+				tokenCounter = tokens
+			} else {
+				tokenCounter += (len(delta) + 3) / 4
+			}
+
+			bufStr := streamBuffer.String()
+
+			// 1. Detect planned sections from JSON schema ("id": "sec-...") early in the stream
+			for _, m := range secIdJsonRegex.FindAllStringSubmatch(bufStr, -1) {
+				id := m[1]
+				cleanName := strings.TrimPrefix(id, "sec-")
+				if !seenSections[id] && !seenSections[cleanName] {
+					seenSections[id] = true
+					seenSections[cleanName] = true
+					detectedSections = append(detectedSections, cleanName)
+				}
+			}
+
+			// 2. Detect section types from JSON while filtering non-section words
+			for _, m := range secRegex.FindAllStringSubmatch(bufStr, -1) {
+				t := strings.ToLower(m[1])
+				if t == "json_object" || t == "web" || t == "mobile" || t == "desktop" ||
+					t == "light" || t == "dark" || t == "text" || t == "string" ||
+					t == "number" || t == "email" || t == "password" || t == "date" ||
+					t == "select" || t == "textarea" || t == "button" || t == "app" ||
+					t == "page" || t == "input" || t == "simple" || t == "moderate" ||
+					t == "complex" || t == "high" || t == "medium" || t == "low" {
+					continue
+				}
+				if !seenSections[t] {
+					seenSections[t] = true
+					detectedSections = append(detectedSections, t)
+				}
+			}
+
+			// 3. Detect sections from rendered HTML tags
+			for _, m := range idRegex.FindAllStringSubmatch(bufStr, -1) {
+				id := m[1]
+				if strings.HasPrefix(id, "sec-") {
+					cleanName := strings.TrimPrefix(id, "sec-")
+					if !seenSections[id] && !seenSections[cleanName] {
+						seenSections[id] = true
+						seenSections[cleanName] = true
+						detectedSections = append(detectedSections, cleanName)
+					}
+				}
+			}
+
+			if tokenCounter-lastEmitted >= 60 || strings.Contains(delta, `data-rl-id="sec-`) {
+				lastEmitted = tokenCounter
+				msg := "Menyusun komponen antarmuka & kode Tailwind..."
+				currentSec := ""
+				if len(detectedSections) > 0 {
+					currentSec = detectedSections[len(detectedSections)-1]
+				}
+				if m := idRegex.FindStringSubmatch(delta); len(m) > 1 && strings.HasPrefix(m[1], "sec-") {
+					currentSec = strings.TrimPrefix(m[1], "sec-")
+				}
+
+				if strings.Contains(delta, "nav") || strings.Contains(delta, "header") || strings.Contains(currentSec, "nav") {
+					msg = "Merancang struktur navigasi & header..."
+				} else if strings.Contains(delta, "hero") || strings.Contains(currentSec, "hero") {
+					msg = "Menyusun hero section & headline..."
+				} else if strings.Contains(delta, "chat") || strings.Contains(delta, "message") || strings.Contains(delta, "workspace") {
+					msg = "Merakit workspace pesan & thread obrolan..."
+				} else if strings.Contains(delta, "card") || strings.Contains(delta, "grid") || strings.Contains(delta, "sidebar") {
+					msg = "Merakit komponen panel & bilah menu..."
+				} else if strings.Contains(delta, "footer") || strings.Contains(currentSec, "footer") {
+					msg = "Menyelesaikan footer & struktur penutup..."
+				}
+
+				onEvent("progress", map[string]interface{}{
+					"stage":          "generating",
+					"tokens":         tokenCounter,
+					"chars":          charCounter,
+					"message":        msg,
+					"sections":       detectedSections,
+					"active_section": currentSec,
+				})
+			}
+		}
+	}
+
+	// Compile UI Design through the 11-Layer AI Design Compiler
+	dsl, err := s.compiler.CompileStream(ctx, prompt, device, foundation, themeMode, accentColor, onChunk)
 	if err != nil {
 		return nil, fmt.Errorf("ai compiler execution failed: %w", err)
+	}
+
+	if onEvent != nil {
+		onEvent("status", map[string]string{
+			"stage":   "compiling",
+			"message": "Memvalidasi komponen & menyiapkan kanvas...",
+		})
 	}
 
 	// Convert compiled frames into Vue Flow nodes
@@ -421,7 +571,7 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 	msg1, _ := s.messageModel.AppendMessage(project.ID, "user", req.Prompt, nil)
 	msg2, _ := s.messageModel.AppendMessage(project.ID, "assistant", assistantReply, nil)
 
-	return &dtos.ProjectResponse{
+	resp := &dtos.ProjectResponse{
 		ID:           project.ID,
 		Title:        project.Title,
 		DiagramType:  project.DiagramType,
@@ -447,7 +597,13 @@ func (s *uiDesignService) GenerateUIDesign(ctx context.Context, req dtos.CreateU
 		},
 		CreatedAt: project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		UpdatedAt: project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
-	}, nil
+	}
+
+	if onEvent != nil {
+		onEvent("complete", resp)
+	}
+
+	return resp, nil
 }
 
 func (s *uiDesignService) IterateUIDesignWithChat(ctx context.Context, projectID, prompt string, targetedNodeIDs []string) (*dtos.ProjectResponse, error) {
@@ -500,6 +656,8 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 					currentFrame = &f
 					targetNodeIdx = idx
 					break
+				} else {
+					log.Printf("[UI_FRAME UNMARSHAL ERROR] Failed to unmarshal node %d into UIFrameData: %v", idx, err)
 				}
 			}
 		}
@@ -529,6 +687,12 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 		}
 	}
 
+	// 3.0 APPEND A NEW FRAME (INSERT_FRAME): add a new page/screen to the project
+	// while preserving every existing frame node untouched.
+	if changePlan.Operation == dtos.OpInsertFrame {
+		return s.appendNewUIFrame(ctx, project, messages, currentNodes, changePlan, prompt)
+	}
+
 	var summary string
 	var updatedNodes []interface{}
 
@@ -537,15 +701,23 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 		changePlan.Strategy == "section_patch" ||
 		changePlan.Strategy == "patch" ||
 		changePlan.Strategy == "token_update" ||
+		changePlan.Strategy == "insert_section" ||
+		changePlan.Strategy == "delete_section" ||
 		changePlan.Operation == dtos.OpComponentPatch ||
-		changePlan.Operation == dtos.OpSectionPatch
+		changePlan.Operation == dtos.OpSectionPatch ||
+		changePlan.Operation == dtos.OpInsertSection ||
+		changePlan.Operation == dtos.OpDeleteSection
 
 	if isLocalStrategy && currentFrame != nil && targetNodeIdx >= 0 {
 		// Attempt surgical targeted patch
 		patchedFrame, patchExplanation, patchErr := s.targetedPatcher.ApplyTargetedPatch(ctx, currentFrame, changePlan)
 		if patchErr != nil || patchedFrame == nil {
+			log.Printf("[TARGETED PATCH FAILED]: %v (falling back to legacy patch engine)", patchErr)
 			// Fallback to legacy patch engine if targeted patcher encountered an issue
 			patchedFrame, patchExplanation, patchErr = s.patchEngine.ApplyPatch(currentFrame, changePlan)
+			if patchErr != nil {
+				log.Printf("[LEGACY PATCH ENGINE FAILED]: %v", patchErr)
+			}
 		}
 
 		if patchErr == nil && patchedFrame != nil {
@@ -741,3 +913,404 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 		UpdatedAt:     project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}, nil
 }
+
+// appendNewUIFrame adds a brand-new page/frame to an existing UI Design project
+// without touching any existing frame nodes. It compiles one fresh frame through
+// the single-call pipeline, appends it as a new ui_frame node, persists a new
+// version, and returns the updated project state containing ALL frames.
+func (s *uiDesignService) appendNewUIFrame(
+	ctx context.Context,
+	project *entities.Project,
+	messages []entities.ChatMessage,
+	currentNodes []map[string]interface{},
+	changePlan *dtos.ChangePlanDTO,
+	userPrompt string,
+) (*dtos.ProjectResponse, error) {
+	// 1. Determine the next frame index + x offset from existing ui_frame nodes.
+	maxIndex := 0
+	maxX := 60.0
+	foundFrame := false
+	device := strings.ToLower(strings.TrimSpace(changePlan.Target.Device))
+	if device == "" {
+		device = "web"
+	}
+	pageType := strings.TrimSpace(changePlan.Target.SectionID)
+
+	for _, n := range currentNodes {
+		if n["type"] != "ui_frame" {
+			continue
+		}
+		foundFrame = true
+		if id, ok := n["id"].(string); ok {
+			if idx, err := strconv.Atoi(strings.TrimPrefix(id, "ui-frame-")); err == nil && idx > maxIndex {
+				maxIndex = idx
+			}
+		}
+		if pos, ok := n["position"].(map[string]interface{}); ok {
+			if px, ok := pos["x"].(float64); ok && px >= maxX {
+				maxX = px
+			}
+		}
+		if data, ok := n["data"].(map[string]interface{}); ok {
+			if w, ok := data["width"].(float64); ok {
+				maxX = maxX + w
+			}
+		}
+	}
+	nextIndex := maxIndex + 1
+	xOffset := maxX + 80.0
+	if !foundFrame {
+		xOffset = 60.0
+	}
+
+	// 2. Derive shared design tokens, navigation/sidebar structure, product domain, and branding from the first frame.
+	themeMode := ""
+	accentColor := ""
+	firstFrameTitle := ""
+	var navSnippet string
+	var footerSnippet string
+	var isSidebarLayout bool
+	var productDomain string
+	var targetUser string
+	var pagePurpose string
+	var brandSnippet string
+
+	if len(currentNodes) > 0 {
+		if currentFrameData, ok := currentNodes[0]["data"].(map[string]interface{}); ok {
+			if t, ok := currentFrameData["title"].(string); ok {
+				firstFrameTitle = t
+			}
+			if m, ok := currentFrameData["theme"].(map[string]interface{}); ok {
+				if mode, ok := m["mode"].(string); ok {
+					themeMode = mode
+				}
+				if prim, ok := m["primary"].(string); ok {
+					accentColor = prim
+				}
+			}
+			if reqSpec, ok := currentFrameData["requirement_spec"].(map[string]interface{}); ok {
+				if ctxMap, ok := reqSpec["context"].(map[string]interface{}); ok {
+					if d, ok := ctxMap["domain"].(string); ok && d != "" {
+						productDomain = d
+					}
+					if u, ok := ctxMap["target_user"].(string); ok && u != "" {
+						targetUser = u
+					}
+				}
+			}
+			if pageSpec, ok := currentFrameData["page_spec"].(map[string]interface{}); ok {
+				if p, ok := pageSpec["purpose"].(string); ok && p != "" {
+					pagePurpose = p
+				}
+			}
+
+			firstHtml, _ := currentFrameData["raw_html"].(string)
+			if firstHtml == "" {
+				firstHtml, _ = currentFrameData["rawHtml"].(string)
+			}
+			if firstHtml != "" {
+				// Search for any navigation container (sidebar, topbar, header)
+				for _, navId := range []string{"sec-sidebar", "sec-top-navigation", "sec-header", "sec-navbar-global", "sec-topbar", "navbar", "header", "aside"} {
+					if snip, _, _, err := findElementSnippet(firstHtml, navId); err == nil && snip != "" {
+						navSnippet = snip
+						if navId == "sec-sidebar" || navId == "aside" || strings.Contains(snip, "<aside") {
+							isSidebarLayout = true
+						}
+						break
+					}
+				}
+				brandSnippet = extractBrandSnippet(firstHtml, navSnippet)
+				for _, fId := range []string{"sec-footer", "footer"} {
+					if snip, _, _, err := findElementSnippet(firstHtml, fId); err == nil && snip != "" {
+						footerSnippet = snip
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Extract original user prompt / concept from project chat messages
+	var initialPromptConcept string
+	if len(messages) > 0 {
+		for _, m := range messages {
+			if m.Role == "user" && strings.TrimSpace(m.Content) != "" {
+				initialPromptConcept = strings.TrimSpace(m.Content)
+				if len(initialPromptConcept) > 400 {
+					initialPromptConcept = initialPromptConcept[:400] + "..."
+				}
+				break
+			}
+		}
+	}
+
+	// Detect if new screen is a login or authentication page
+	lowerPrompt := strings.ToLower(userPrompt)
+	isAuthPage := strings.Contains(lowerPrompt, "login") ||
+		strings.Contains(lowerPrompt, "masuk") ||
+		strings.Contains(lowerPrompt, "auth") ||
+		strings.Contains(lowerPrompt, "sign in") ||
+		strings.Contains(lowerPrompt, "signin") ||
+		strings.Contains(lowerPrompt, "register") ||
+		strings.Contains(lowerPrompt, "daftar") ||
+		strings.Contains(lowerPrompt, "sign up") ||
+		pageType == "login" || pageType == "auth" || pageType == "register"
+
+	// Extract clean brand text if brand snippet exists
+	brandText := ""
+	if brandSnippet != "" {
+		reStrip := regexp.MustCompile(`<[^>]*>`)
+		t := strings.TrimSpace(reStrip.ReplaceAllString(brandSnippet, " "))
+		brandText = strings.Join(strings.Fields(t), " ")
+	}
+
+	// 3. Build the new-page synthesis prompt with strict Screen 1 brand & domain consistency.
+	newPrompt := strings.TrimSpace(userPrompt)
+	if pageType != "" && pageType != "new_page" && !strings.Contains(strings.ToLower(newPrompt), pageType) {
+		if newPrompt != "" {
+			newPrompt = "Buat halaman UI: " + pageType + ". " + newPrompt
+		} else {
+			newPrompt = "Buat halaman UI: " + pageType
+		}
+	}
+
+	var consistencyPrompt strings.Builder
+	consistencyPrompt.WriteString(newPrompt)
+	consistencyPrompt.WriteString("\n\nPANDUAN KONSISTENSI MULTI-SCREEN (WAJIB MENGIKUTI SCREEN 1 SECARA HARMONIS):\n")
+
+	if productDomain != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- Domain Sistem / Produk: %s\n", productDomain))
+	}
+	if targetUser != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- Target Pengguna: %s\n", targetUser))
+	}
+	if pagePurpose != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- Tujuan Ekosistem Platform: %s\n", pagePurpose))
+	}
+	if initialPromptConcept != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- Konsep Platform Dasar: %s\n", initialPromptConcept))
+	}
+
+	if brandText != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- Nama Brand / Organisasi di Screen 1: %s\n", brandText))
+	} else if firstFrameTitle != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- Nama Brand / Workspace di Screen 1: %s\n", firstFrameTitle))
+	}
+
+	if brandSnippet != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- LOGO & IDENTITAS BRAND SCREEN 1 (WAJIB GUNAKAN STRUKTUR, KELAS TAILWIND, ICON SVG, DAN TEKS INI):\n%s\n", brandSnippet))
+	}
+
+	if themeMode != "" || accentColor != "" {
+		consistencyPrompt.WriteString(fmt.Sprintf("- Tema Visual: Mode %s, Aksen Warna %s. Pertahankan tone warna latar, border, dan font yang identik dengan Screen 1.\n", themeMode, accentColor))
+	}
+
+	if isAuthPage {
+		effectiveBrand := brandText
+		if effectiveBrand == "" {
+			effectiveBrand = firstFrameTitle
+		}
+		consistencyPrompt.WriteString(fmt.Sprintf(`- INSTRUKSI KHUSUS HALAMAN LOGIN / AUTHENTICATION:
+  1. PERINGATAN KERAS ANTI-HALLUCINATION: DILARANG KERAS membuat navbar marketing SaaS publik (seperti 'Solutions', 'Pricing', 'Infrastructure', 'Cluster Status', 'Documentation', 'Enterprise Helpdesk', 'Auth Gateway v2.4', 'API Status', dsb).
+  2. Ini adalah portal autentikasi internal resmi karyawan/organisasi untuk %s (%s).
+  3. IDENTITAS BRAND & JUDUL: Wajib menampilkan logo dan nama brand '%s' secara persis (JANGAN menggunakan nama brand atau portal SaaS acak). Judul halaman harus menggunakan brand '%s'.
+  4. Header / Navigasi: Minimalis atau terintegrasi langsung di atas form login. Hanya tampilkan logo resmi Screen 1 dan status keamanan/lingkungan (misal badge 'SSO Protected', 'Corporate Gateway', atau 'Internal Network').
+  5. Form Login Utama:
+     - Card login yang presisi, clean, dan profesional di tengah layar (atau split layout minimalis).
+     - Opsi login Corporate SSO ('Sign in with Corporate SSO' / SAML / Okta) sebagai opsi utama karyawan.
+     - Input Corporate Email (@perusahaan) dan Password dengan styling Tailwind yang halus dan serasi.
+     - Opsi 'Ingat saya di perangkat ini' dan link 'Bantuan Akses IT / Hubungi Admin'.
+  6. Catatan Kepatuhan: Sertakan disclaimer keamanan korporat ringkas di bagian bawah card login.
+  7. Skema Warna & Estetika: Latar belakang, card, dan warna aksen (%s) harus 100%%%% serasi dengan Screen 1.
+`, effectiveBrand, productDomain, effectiveBrand, effectiveBrand, accentColor))
+	} else {
+		if isSidebarLayout && navSnippet != "" && len(navSnippet) < 3000 {
+			consistencyPrompt.WriteString(fmt.Sprintf("- LAYOUT SIDEBAR: Screen 1 menggunakan Sidebar navigasi. Pertahankan Sidebar yang sama persis dengan Screen 1 (logo, menu, styling) dan aktifkan item menu yang relevan dengan halaman baru ini:\n%s\n", navSnippet))
+		} else if navSnippet != "" && len(navSnippet) < 2500 {
+			consistencyPrompt.WriteString(fmt.Sprintf("- LAYOUT HEADER: Pertahankan header/navbar yang sama persis dengan Screen 1, dengan status tab navigasi aktif mengarah ke halaman baru ini:\n%s\n", navSnippet))
+		}
+		if footerSnippet != "" && len(footerSnippet) < 1500 {
+			consistencyPrompt.WriteString(fmt.Sprintf("- FOOTER: Gunakan footer yang seragam dengan Screen 1:\n%s\n", footerSnippet))
+		}
+	}
+
+	dsl, err := s.compiler.Compile(ctx, consistencyPrompt.String(), device, "", themeMode, accentColor)
+	if err != nil {
+		return nil, fmt.Errorf("insert frame compile failed: %w", err)
+	}
+	if len(dsl.Frames) == 0 {
+		return nil, fmt.Errorf("insert frame produced no frames")
+	}
+
+	// 4. Convert the freshly compiled frame into a ui_frame node.
+	frame := dsl.Frames[0]
+	w := frame.Width
+	if w <= 0 {
+		if frame.Device == "mobile" {
+			w = 375
+		} else {
+			w = 1024
+		}
+	}
+	h := frame.Height
+	if h <= 0 {
+		if frame.Device == "mobile" {
+			h = 812
+		} else {
+			h = 720
+		}
+	}
+	rawHtmlContent := ""
+	if frame.CodeExport != nil {
+		rawHtmlContent = frame.CodeExport["html"]
+	}
+	frame.SyncCanonical(xOffset, 60)
+	if dsl.DesignSpec != nil && frame.DesignState != nil {
+		frame.DesignState.DesignSpec = dsl.DesignSpec
+	}
+
+	newFrameNode := map[string]interface{}{
+		"id":       fmt.Sprintf("ui-frame-%d", nextIndex),
+		"type":     "ui_frame",
+		"position": map[string]float64{"x": xOffset, "y": 60},
+		"data": map[string]interface{}{
+			"canvas":           frame.Canvas,
+			"design_state":     frame.DesignState,
+			"implementation":   frame.Implementation,
+			"audit":            frame.Audit,
+			"device":           frame.Device,
+			"title":            frame.Title,
+			"width":            w,
+			"height":           h,
+			"theme":            frame.Theme,
+			"raw_html":         rawHtmlContent,
+			"rawHtml":          rawHtmlContent,
+			"sections":         frame.Sections,
+			"code_export":      frame.CodeExport,
+			"page_spec":        frame.PageSpec,
+			"design_decisions": frame.DesignDecisions,
+			"anti_slop_audit":  frame.AntiSlopAudit,
+			"requirement_spec": frame.RequirementSpec,
+			"validation":       frame.Validation,
+		},
+	}
+	// Keep canonical implementation.source.html in sync.
+	if implState, ok := newFrameNode["data"].(map[string]interface{}); ok {
+		if implMap, ok := implState["implementation"].(map[string]interface{}); ok {
+			if srcMap, ok := implMap["source"].(map[string]interface{}); ok {
+				srcMap["html"] = rawHtmlContent
+			}
+		}
+	}
+
+	// 5. Append while preserving every existing node.
+	updatedNodes := make([]interface{}, 0, len(currentNodes)+1)
+	for _, n := range currentNodes {
+		updatedNodes = append(updatedNodes, n)
+	}
+	updatedNodes = append(updatedNodes, newFrameNode)
+
+	// 6. Version + persist + messages (mirror IterateUIDesignWithTargetedChat tail).
+	latestVer, _ := s.versionModel.GetLatestVersionNumber(project.ID)
+	if latestVer <= 0 {
+		latestVer = 1
+	}
+	versionNum := latestVer + 1
+
+	for _, n := range updatedNodes {
+		if nodeMap, ok := n.(map[string]interface{}); ok {
+			if dataMap, ok := nodeMap["data"].(map[string]interface{}); ok {
+				dataMap["version"] = versionNum
+			}
+		}
+	}
+
+	nodesBytes, _ := json.Marshal(updatedNodes)
+	edgesBytes := project.CurrentEdges
+
+	if err := s.projectModel.UpdateGraph(project.ID, nodesBytes, edgesBytes); err != nil {
+		return nil, fmt.Errorf("failed to update graph: %w", err)
+	}
+	summary := fmt.Sprintf("✨ **[INSERT_FRAME]** Halaman UI baru '%s' (device: %s) ditambahkan di samping frame yang ada.", frame.Title, device)
+	_, _ = s.versionModel.CreateVersion(project.ID, versionNum, summary, nodesBytes, edgesBytes, nil)
+
+	msg1, _ := s.messageModel.AppendMessage(project.ID, "user", userPrompt, nil)
+	msg2, _ := s.messageModel.AppendMessage(project.ID, "assistant", summary, nil)
+
+	updatedMessages := append(messages, *msg1, *msg2)
+	var messageDTOs []dtos.ChatMessageDTO
+	for _, m := range updatedMessages {
+		messageDTOs = append(messageDTOs, dtos.ChatMessageDTO{
+			ID:        m.ID,
+			ProjectID: m.ProjectID,
+			Role:      m.Role,
+			Content:   m.Content,
+			CreatedAt: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+
+	return &dtos.ProjectResponse{
+		ID:            project.ID,
+		Title:         project.Title,
+		DiagramType:   project.DiagramType,
+		CurrentNodes:  nodesBytes,
+		CurrentEdges:  edgesBytes,
+		Nodes:         nodesBytes,
+		Edges:         edgesBytes,
+		Messages:      messageDTOs,
+		Version:       versionNum,
+		VersionNumber: versionNum,
+		CreatedAt:     project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:     project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+// extractBrandSnippet finds the logo/brand element in the HTML
+func extractBrandSnippet(html, navSnippet string) string {
+	// 1. Try finding explicit brand/logo component IDs
+	for _, id := range []string{"comp-brand-logo", "cmp-logo", "brand-logo", "logo", "comp-logo"} {
+		if snip, _, _, err := findElementSnippet(html, id); err == nil && snip != "" {
+			return snip
+		}
+	}
+
+	// 2. Search inside navSnippet for the container enclosing the SVG icon AND brand text
+	if navSnippet != "" {
+		svgIdx := strings.Index(navSnippet, "<svg")
+		if svgIdx != -1 {
+			openDiv := strings.LastIndex(navSnippet[:svgIdx], "<div")
+			if openDiv != -1 {
+				// Check parent div if openDiv is just the icon wrapper
+				parentDiv := strings.LastIndex(navSnippet[:openDiv], "<div")
+				if parentDiv != -1 {
+					if parentSnip, _, _, err := findBalancedTagFromIndex(navSnippet, parentDiv); err == nil && parentSnip != "" && len(parentSnip) <= 1500 {
+						// Ensure this parent actually contains brand name text
+						textOnly := strings.TrimSpace(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(parentSnip, ""))
+						if len(textOnly) > 0 {
+							return parentSnip
+						}
+					}
+				}
+				// If parentDiv wasn't the brand wrapper, try openDiv directly
+				if snip, _, _, err := findBalancedTagFromIndex(navSnippet, openDiv); err == nil && snip != "" && len(snip) <= 1200 {
+					textOnly := strings.TrimSpace(regexp.MustCompile(`<[^>]*>`).ReplaceAllString(snip, ""))
+					if len(textOnly) > 0 {
+						return snip
+					}
+				}
+			}
+		}
+
+		// Fallback: first div inside navSnippet up to 2500 chars if it has text
+		startDiv := strings.Index(navSnippet, "<div")
+		if startDiv != -1 {
+			if snip, _, _, err := findBalancedTagFromIndex(navSnippet, startDiv); err == nil && snip != "" && len(snip) <= 2500 {
+				return snip
+			}
+		}
+	}
+
+	return ""
+}
+
+

@@ -55,6 +55,7 @@ func RegisterRoutes(
 	// UI Design Modular Routes
 	mux.HandleFunc("GET /api/ui-design/templates", uiDesignCtrl.GetTemplates)
 	mux.HandleFunc("POST /api/ui-design/generate", uiDesignCtrl.Create)
+	mux.HandleFunc("POST /api/ui-design/generate/stream", uiDesignCtrl.CreateStream)
 	mux.HandleFunc("POST /api/ui-design/projects/{id}/chat", uiDesignCtrl.Chat)
 
 	// CrewAI Asynchronous Orchestration Routes

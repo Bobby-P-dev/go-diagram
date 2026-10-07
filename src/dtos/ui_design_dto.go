@@ -286,6 +286,7 @@ type TargetElementDTO struct {
 	SectionID   string `json:"section_id,omitempty"`   // Stable ID e.g. "sec-auth-form"
 	Property    string `json:"property,omitempty"`
 	ID          string `json:"id,omitempty"`           // Canonical ID matching target
+	Device      string `json:"device,omitempty"`       // desired device for a new frame (INSERT_FRAME)
 }
 
 type OperationType string
@@ -298,6 +299,7 @@ const (
 	OpInsertSection   OperationType = "INSERT_SECTION"
 	OpDeleteSection   OperationType = "DELETE_SECTION"
 	OpReorderSections OperationType = "REORDER_SECTIONS"
+	OpInsertFrame     OperationType = "INSERT_FRAME"
 )
 
 type ChangePlanDTO struct {
@@ -342,7 +344,7 @@ type UIFrameData struct {
 	Sections        []UISectionDTO               `json:"sections,omitempty"`
 	CodeExport      map[string]string            `json:"code_export,omitempty"`
 	PageSpec        *PageSpecificationDTO        `json:"page_spec,omitempty"`
-	DesignDecisions *DesignDecisionsDTO          `json:"design_decisions,omitempty"`
+	DesignDecisions interface{}                  `json:"design_decisions,omitempty"`
 	AntiSlopAudit   *AntiSlopAuditDTO            `json:"anti_slop_audit,omitempty"`
 	RequirementSpec *RequirementSpecificationDTO `json:"requirement_spec,omitempty"`
 	Validation      *UIValidationResultDTO       `json:"validation,omitempty"`
@@ -436,10 +438,10 @@ func (f *UIFrameData) SyncCanonical(posX, posY float64) {
 	}
 	if f.Audit == nil && f.Validation != nil {
 		f.Audit = &AuditStateDTO{
-			Validation: f.Validation,
+			Validation:          f.Validation,
 			RequirementCoverage: &AuditEvaluationDTO{Status: f.Validation.Status},
-			AntiSlop:            &AuditEvaluationDTO{Status: "pass"},
-			VisualReview:        &AuditEvaluationDTO{Status: "pass"},
+			AntiSlop:            &AuditEvaluationDTO{Status: "not_evaluated"},
+			VisualReview:        &AuditEvaluationDTO{Status: "not_evaluated"},
 		}
 	}
 }

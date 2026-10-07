@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
@@ -43,7 +44,7 @@ Optional features MUST NEVER be placed in 'explicit' or 'implied'. They belong O
 RULE 4: Separate visual style from product function and page composition:
 - "modern" is a visual direction, NOT SaaS or startup or dashboard.
 - "elegan" is an aesthetic treatment (refined typography, generous whitespace, understated luxury), NOT a corporate suite.
-- "minimal" / "minimalis" is an aesthetic visual treatment (clean typography, generous whitespace, subtle borders, uncluttered layout), NOT a command to delete or prune page sections. A minimal landing page still has full storytelling and 4-8 rich sections.
+- "minimal" / "minimalis" is an aesthetic visual treatment (clean typography, generous whitespace, subtle borders, uncluttered layout), NOT a command to delete or prune page sections. A minimal page still preserves the requested content and tasks; section count follows the brief.
 
 RULE 5: Never invent business functionality (no treasury, no OCR, no virtual cards, no trading, no workflows).
 RULE 6: Never invent statistics, metrics, or revenue.
@@ -51,7 +52,7 @@ RULE 7: Never invent company names or fictitious brands. If a URL or brand is me
 RULE 8: 3-AXIS FREEDOM MODEL:
 - functional_freedom is "low": do NOT invent extra business workflows.
 - visual_freedom is "high": explore typography, contrast, spacing, color palette.
-- composition_freedom is "high": orchestrate rich section pacing (hero, product discovery, brand story, testimonials, footer).
+- composition_freedom is "high": choose section pacing from the page purpose instead of requiring a landing-page sequence.
 RULE 9: "creative" / "experimental" gives visual freedom (design_freedom.visual: "high"), but NEVER authorizes inventing unrequested business workflows (functional freedom remains "low").
 RULE 10: For unknown products, use neutral content ("Masuk ke akun Anda", NOT "Kelola seluruh workflow visual Anda").
 RULE 11: When information is missing, preserve the uncertainty (keep fields null or empty).
@@ -61,8 +62,8 @@ RULE 12: PAGE TYPE STRUCTURAL BOUNDS:
   * Implied: ONLY credential input (email/username), password input, and submit action.
   * Optional: Google login, GitHub login, remember me, forgot password, registration. DO NOT make these implied!
 - HOMEPAGE / LANDING:
-  * Implied: navigation or header, hero section with visual anchor, primary intro action.
-  * Composition elements: product showcase/grid, brand ethos, customer reviews, conversion banner, footer.
+  * Infer only the composition needed to communicate the stated purpose; no fixed section count or sequence.
+  * Do not fabricate reviews, numerical claims or products merely to populate common section patterns.
 
 OUTPUT JSON SCHEMA:
 {
@@ -150,9 +151,16 @@ Output JSON matching the schema.`, trimmedPrompt, device, foundation)
 
 	// Always preserve raw_prompt
 	spec.RawPrompt = trimmedPrompt
+	return enforceRequirementRules(&spec), nil
+}
 
+// enforceRequirementRules applies deterministic requirement guards that do not
+// need another LLM call: design-freedom defaults, minimal/vivid keyword mapping,
+// login optional-feature scrubbing, and canonical structured requirement items.
+// Shared by the live analyzing stage and the single-call synthesis path.
+func enforceRequirementRules(spec *dtos.RequirementSpecificationDTO) *dtos.RequirementSpecificationDTO {
 	// Deterministic rule enforcement
-	lowerPrompt := strings.ToLower(trimmedPrompt)
+	lowerPrompt := strings.ToLower(spec.RawPrompt)
 
 	// Ensure DesignFreedom is initialized
 	if spec.DesignFreedom == nil {
@@ -165,28 +173,51 @@ Output JSON matching the schema.`, trimmedPrompt, device, foundation)
 		spec.DesignFreedom.Functional = "low"
 	}
 
-	// Complexity and visual freedom calibration
-	if strings.Contains(lowerPrompt, "sederhana") || strings.Contains(lowerPrompt, "simple") || strings.Contains(lowerPrompt, "minimal") {
-		spec.Page.Complexity = "simple"
-		spec.DesignFreedom.Visual = "low"
-		spec.Constraints = append(spec.Constraints, "low complexity", "minimal visual noise", "strictly no unrequested features")
-	} else if strings.Contains(lowerPrompt, "kreatif") || strings.Contains(lowerPrompt, "creative") || strings.Contains(lowerPrompt, "experimental") || strings.Contains(lowerPrompt, "bold") {
-		spec.DesignFreedom.Visual = "high"
-	} else {
-		spec.DesignFreedom.Visual = "medium"
+	// Domain grounding check: If prompt does not mention any explicit business domain,
+	// keep domain null to prevent hallucinated domain anchoring on generic prompts.
+	domainKeywords := []string{
+		"erp", "procurement", "kue", "bakery", "pastry", "makanan", "food", "restoran", "restaurant",
+		"tari", "dance", "klinik", "clinic", "hospital", "rumah sakit", "sekolah", "school",
+		"universitas", "toko", "shop", "ecommerce", "e-commerce", "buku", "book", "fashion",
+		"hotel", "travel", "properti", "real estate", "game", "gaming", "fitness", "gym",
+		"crypto", "bank", "fintech", "pos", "kasir", "point of sale", "logistik", "logistic",
 	}
-
-	// Rule 1 Enforcement: If prompt does NOT contain specific domain keywords, force domain to null!
-	domainKeywords := []string{"fintech", "finance", "bank", "erp", "procurement", "medis", "klinik", "hospital", "gym", "bengkel", "resto", "kafe", "crm", "ecommerce", "toko", "crypto"}
-	hasExplicitDomain := false
-	for _, kw := range domainKeywords {
-		if strings.Contains(lowerPrompt, kw) {
-			hasExplicitDomain = true
+	hasDomainKeyword := false
+	for _, dk := range domainKeywords {
+		if strings.Contains(lowerPrompt, dk) {
+			hasDomainKeyword = true
 			break
 		}
 	}
-	if !hasExplicitDomain {
+	if !hasDomainKeyword {
 		spec.Context.Domain = nil
+		prohibited := []string{"treasury", "cfo", "virtual card", "credit limit", "crypto", "blockchain"}
+		for _, bad := range prohibited {
+			re := regexp.MustCompile(fmt.Sprintf(`(?i)\b%s\b`, regexp.QuoteMeta(bad)))
+			spec.Goals.Primary = re.ReplaceAllString(spec.Goals.Primary, "feature")
+			for i := range spec.Goals.Secondary {
+				spec.Goals.Secondary[i] = re.ReplaceAllString(spec.Goals.Secondary[i], "feature")
+			}
+			for i := range spec.Requirements.Explicit {
+				spec.Requirements.Explicit[i] = re.ReplaceAllString(spec.Requirements.Explicit[i], "feature")
+			}
+			for i := range spec.Requirements.Implied {
+				spec.Requirements.Implied[i] = re.ReplaceAllString(spec.Requirements.Implied[i], "feature")
+			}
+			for i := range spec.Requirements.Optional {
+				spec.Requirements.Optional[i] = re.ReplaceAllString(spec.Requirements.Optional[i], "feature")
+			}
+		}
+	}
+
+	if strings.Contains(lowerPrompt, "sederhana") || strings.Contains(lowerPrompt, "simple") {
+		spec.Page.Complexity = "simple"
+	}
+
+	// Minimal describes an aesthetic, not missing content. Preserve the model's
+	// grounded domain and composition instead of narrowing to a keyword whitelist.
+	if strings.Contains(lowerPrompt, "kreatif") || strings.Contains(lowerPrompt, "creative") || strings.Contains(lowerPrompt, "experimental") || strings.Contains(lowerPrompt, "bold") {
+		spec.DesignFreedom.Visual = "high"
 	}
 
 	// Login & Auth Specific Enforcement:
@@ -312,5 +343,5 @@ Output JSON matching the schema.`, trimmedPrompt, device, foundation)
 	spec.Optional = spec.Requirements.StructuredOptional
 	spec.Excluded = spec.Requirements.StructuredExcluded
 
-	return &spec, nil
+	return spec
 }

@@ -78,6 +78,20 @@ func (v *UIValidator) ValidateAndAudit(
 	}
 
 	for _, sec := range designSpec.Sections {
+		// Repair decorative auth copy before domain detection so a valid form is
+		// not discarded because its subtitle drifted into an unrelated product.
+		if !isDomainSpecified && sec.Data != nil && (sec.Type == "form" || sec.Type == "auth_card" || sec.Type == "login_card") {
+			if subtitle, ok := sec.Data["subtitle"].(string); ok {
+				for _, keyword := range hallucinatedDomainKeywords {
+					if strings.Contains(strings.ToLower(subtitle), keyword) && !isExplicitlyRequested(keyword) {
+						sec.Data["subtitle"] = "Masuk ke akun Anda."
+						issues = append(issues, "Neutralized unrelated domain copy in "+sec.ID)
+						structuredIssues = append(structuredIssues, dtos.ValidationIssueDTO{Type: "content_drift", Component: sec.ID + ".subtitle", Action: "neutralize", Reason: "unrequested domain in authentication copy"})
+						break
+					}
+				}
+			}
+		}
 		secBytes, _ := json.Marshal(sec)
 		secStr := strings.ToLower(string(secBytes))
 
@@ -85,7 +99,7 @@ func (v *UIValidator) ValidateAndAudit(
 		hasHallucination := false
 		if !isDomainSpecified {
 			for _, kw := range hallucinatedDomainKeywords {
-				if strings.Contains(secStr, kw) {
+				if strings.Contains(secStr, kw) && !isExplicitlyRequested(kw) {
 					hasHallucination = true
 					issues = append(issues, "Detected and stripped unrequested domain feature: '"+kw+"' in section '"+sec.Type+"'")
 					strippedSections = append(strippedSections, sec.ID+": "+kw)
@@ -254,32 +268,11 @@ func (v *UIValidator) ValidateAndAudit(
 		repairedSections = append(repairedSections, sec)
 	}
 
-	// 4. Section Count Sanity Guard: Prevent runaway duplicates while allowing rich storytelling compositions (up to 12 sections)
-	if isSimpleComplexity && len(repairedSections) > 4 {
-		repairedSections = repairedSections[:4]
-		issues = append(issues, "Bounded simple page complexity to max 4 sections")
-	} else if len(repairedSections) > 12 {
-		repairedSections = repairedSections[:12]
-		issues = append(issues, "Bounded section count to 12 sections to ensure optimal visual rhythm and load performance")
-	}
-
-	// Ensure at least one valid section exists
+	// Missing usable output must be reported, never replaced by an unrelated hero.
 	if len(repairedSections) == 0 {
-		repairedSections = append(repairedSections, dtos.UISectionDTO{
-			ID:                "sec-hero",
-			Type:              "hero",
-			Purpose:           "Present primary value proposition",
-			RequirementSource: "primary_goal",
-			Priority:          "high",
-			Data: map[string]interface{}{
-				"title":    "Solusi Digital Terpadu",
-				"subtitle": "Pengalaman antarmuka modern yang bersih, cepat, dan mudah digunakan.",
-				"actions": []map[string]string{
-					{"label": "Mulai Sekarang", "variant": "primary"},
-				},
-			},
-		})
-		issues = append(issues, "Fallback hero section added to preserve minimal valid layout")
+		validatedSpec := *designSpec
+		validatedSpec.Sections = repairedSections
+		return &dtos.UIValidationResultDTO{Status: "fail", Issues: append(issues, "No valid sections remain"), StrippedSections: strippedSections, StructuredIssues: structuredIssues, HallucinationCheck: "failed: no valid sections"}, &validatedSpec
 	}
 
 	// Clone design spec with repaired sections
@@ -291,9 +284,9 @@ func (v *UIValidator) ValidateAndAudit(
 	scopeAccuracyScore := 10
 	traceabilityScore := 10
 	simplicityScore := 10
-	hierarchyScore := 9
-	visualConsistencyScore := 9
-	responsiveQualityScore := 10
+	hierarchyScore := 0         // Not measured by structural validation.
+	visualConsistencyScore := 0 // Requires rendered inspection.
+	responsiveQualityScore := 0 // Requires viewport inspection.
 	hallucinationSafetyScore := 10
 
 	if len(strippedSections) > 0 {

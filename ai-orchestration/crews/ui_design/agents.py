@@ -29,13 +29,11 @@ def create_requirement_analyst_agent(llm: Optional[LLM] = None) -> Agent:
         role="Senior Product Requirement Analyst",
         goal="Extract strictly validated WHAT requirements with 3-Axis Freedom (functional: low, visual: high, composition: high), separating product functionality from page composition.",
         backstory=(
-            "You are a principal Requirement Analyst for an elite digital product design agency. "
-            "You enforce the 3-Axis Freedom Model:\n"
-            "1. Functional Freedom = LOW. Never invent fictitious business domains (e.g. crypto, treasury, ERP) unless requested.\n"
-            "2. Visual Freedom = HIGH. Maximize aesthetic exploration, typography pairings, color harmonies, and mood.\n"
-            "3. Composition Freedom = HIGH. Orchestrate rich storytelling rhythms, asymmetric discovery, and natural section flows.\n"
-            "Crucially, you separate Product Functionality (business transactions) from Page Composition (intro, showcase, proof, value pillars). "
-            "A rich multi-section landing page is legitimate composition, NOT functional bloat. You never clamp sections to 1-3."
+            "You translate a user's request into a precise, concise product and visual brief. "
+            "Preserve explicit features, brand, language, style preferences and exclusions. "
+            "Choose structure and density according to the primary task, whether a form, editor, "
+            "dashboard, shop or landing page. Minimal visual style does not remove requirements. "
+            "Treat retrieved design knowledge as optional guidance, not a mandatory template."
         ),
         verbose=False,
         allow_delegation=False,
@@ -102,16 +100,15 @@ def create_ui_component_specialist_agent(llm: Optional[LLM] = None) -> Agent:
         role="Senior Design System & Bespoke Code Engineer",
         goal="Synthesize bespoke, production-ready Tailwind CSS HTML with intentional visual rhythm, varied section compositions, and curated photography.",
         backstory=(
-            "You are an elite Frontend & Tailwind CSS Engineer. You craft unique, pixel-perfect, responsive HTML designs. "
-            "You despise template repetitiveness and uniform card blocks. You write custom bespoke Tailwind classes that embody the design concept: "
-            "varied section padding (e.g. py-12, py-20, py-28 for dramatic transitions), distinctive hero layouts, "
-            "open grids with generous whitespace, subtle 1px dividers, refined typography scale contrast (text-5xl to 7xl display titles paired with elegant sans/serif body), "
-            "and realistic contextual high-resolution Unsplash image URLs fitting the media strategy. "
-            "You ensure every section feels uniquely designed for the specific product domain."
+            "You implement the user's product brief as complete bespoke HTML and CSS. "
+            "Composition, hierarchy, typography, palette and content must fit the specific task. "
+            "You can create restrained forms, dense dashboards, rich editorial pages and "
+            "specialized tools. Avoid universal templates or imposing marketing aesthetics. "
+            "Use accessible semantic controls, responsive layouts and stable selection IDs."
         ),
         verbose=False,
         allow_delegation=False,
-        llm=llm or get_llm(max_tokens=8192, reasoning_effort="low"),
+        llm=llm or get_llm(max_tokens=16384, reasoning_effort="low"),
     )
 
 def create_fast_bespoke_synthesizer_agent(llm: Optional[LLM] = None) -> Agent:
@@ -126,7 +123,7 @@ def create_fast_bespoke_synthesizer_agent(llm: Optional[LLM] = None) -> Agent:
         ),
         verbose=False,
         allow_delegation=False,
-        llm=llm or get_llm(max_tokens=8192, reasoning_effort="low"),
+        llm=llm or get_llm(max_tokens=16384, reasoning_effort="low"),
     )
 
 def create_visual_patcher_agent(llm: Optional[LLM] = None) -> Agent:

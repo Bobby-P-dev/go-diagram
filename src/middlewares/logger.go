@@ -16,6 +16,12 @@ func (rr *responseRecorder) WriteHeader(code int) {
 	rr.ResponseWriter.WriteHeader(code)
 }
 
+func (rr *responseRecorder) Flush() {
+	if flusher, ok := rr.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func LoggerMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

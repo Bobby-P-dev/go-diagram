@@ -6,6 +6,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
 )
@@ -41,6 +42,9 @@ func (tp *TargetedPatcher) ApplyTargetedPatch(
 	if rawHtml == "" && currentFrame.CodeExport != nil {
 		rawHtml = currentFrame.CodeExport["html"]
 	}
+	if rawHtml == "" && currentFrame.Implementation != nil {
+		rawHtml = currentFrame.Implementation.Source.HTML
+	}
 
 	// 2. Identify target ID
 	targetID := plan.Target.ID
@@ -67,6 +71,16 @@ func (tp *TargetedPatcher) ApplyTargetedPatch(
 			}
 		}
 		return &patchedFrame, fmt.Sprintf("Tema global diperbarui (%s).", plan.Request), nil
+	}
+
+	// 3.1 Handle Section Deletion (OpDeleteSection)
+	if plan.Operation == dtos.OpDeleteSection {
+		return tp.applyDeleteSection(currentFrame, plan, targetID, rawHtml)
+	}
+
+	// 3.2 Handle Section Insertion (OpInsertSection)
+	if plan.Operation == dtos.OpInsertSection || plan.Strategy == "insert_section" {
+		return tp.applyInsertSection(ctx, currentFrame, plan, targetID, rawHtml)
 	}
 
 	// 4. Section or Component Patching
@@ -190,11 +204,20 @@ func findElementSnippet(html, targetID string) (string, int, int, error) {
 		return "", -1, -1, fmt.Errorf("target %s not found in html", targetID)
 	}
 
+	return findBalancedTagFromIndex(html, startTagOpen)
+}
+
+// findBalancedTagFromIndex scans forward from startTagOpen and finds the complete element.
+func findBalancedTagFromIndex(html string, startTagOpen int) (string, int, int, error) {
+	if startTagOpen < 0 || startTagOpen >= len(html) {
+		return "", -1, -1, fmt.Errorf("invalid start tag index %d", startTagOpen)
+	}
+
 	// Determine tag name
 	tagRest := html[startTagOpen+1:]
 	spaceIdx := strings.IndexAny(tagRest, " >\n\r\t")
 	if spaceIdx == -1 {
-		return "", -1, -1, fmt.Errorf("cannot parse tag name for target %s", targetID)
+		return "", -1, -1, fmt.Errorf("cannot parse tag name at index %d", startTagOpen)
 	}
 	tagName := strings.ToLower(tagRest[:spaceIdx])
 
@@ -387,4 +410,198 @@ func updateDesignSpecSection(frame *dtos.UIFrameData, targetID string, plan *dto
 			}
 		}
 	}
+}
+
+func (tp *TargetedPatcher) applyDeleteSection(
+	currentFrame *dtos.UIFrameData,
+	plan *dtos.ChangePlanDTO,
+	targetID string,
+	rawHtml string,
+) (*dtos.UIFrameData, string, error) {
+	if rawHtml == "" {
+		return nil, "", fmt.Errorf("raw html is empty")
+	}
+	if targetID == "" {
+		for _, kw := range []string{"testimonial", "review", "pricing", "hero", "footer", "faq", "features", "stats", "cta"} {
+			if strings.Contains(strings.ToLower(plan.Request), kw) {
+				targetID = "sec-" + kw
+				break
+			}
+		}
+	}
+	if targetID == "" {
+		return nil, "", fmt.Errorf("target section ID is required for section deletion")
+	}
+
+	snippet, startIdx, endIdx, err := findElementSnippet(rawHtml, targetID)
+	if err != nil || snippet == "" {
+		return nil, "", fmt.Errorf("section '%s' not found for deletion: %w", targetID, err)
+	}
+
+	newHtml := strings.TrimSpace(rawHtml[:startIdx]) + "\n" + strings.TrimSpace(rawHtml[endIdx:])
+	patchedFrame := *currentFrame
+	patchedFrame.RawHtml = newHtml
+	if patchedFrame.CodeExport == nil {
+		patchedFrame.CodeExport = make(map[string]string)
+	}
+	patchedFrame.CodeExport["html"] = newHtml
+	if patchedFrame.Implementation != nil {
+		implCopy := *patchedFrame.Implementation
+		implCopy.Source.HTML = newHtml
+		patchedFrame.Implementation = &implCopy
+	}
+	patchedFrame.ChangePlan = plan
+
+	return &patchedFrame, fmt.Sprintf("Seksi '%s' berhasil dihapus dari halaman.", targetID), nil
+}
+
+func (tp *TargetedPatcher) applyInsertSection(
+	ctx context.Context,
+	currentFrame *dtos.UIFrameData,
+	plan *dtos.ChangePlanDTO,
+	targetID string,
+	rawHtml string,
+) (*dtos.UIFrameData, string, error) {
+	if rawHtml == "" {
+		return nil, "", fmt.Errorf("raw html is empty")
+	}
+
+	newSectionHtml, genErr := tp.generateSectionMarkup(ctx, plan, currentFrame)
+	if genErr != nil || strings.TrimSpace(newSectionHtml) == "" {
+		return nil, "", fmt.Errorf("failed to generate section markup: %w", genErr)
+	}
+
+	var insertIdx = -1
+	if targetID != "" {
+		_, _, endIdx, err := findElementSnippet(rawHtml, targetID)
+		if err == nil && endIdx > 0 {
+			insertIdx = endIdx
+		}
+	}
+
+	// If no valid targetID, insert right before footer
+	if insertIdx < 0 {
+		_, footerStart, _, footerErr := findElementSnippet(rawHtml, "sec-footer")
+		if footerErr != nil {
+			_, footerStart, _, footerErr = findElementSnippet(rawHtml, "footer")
+		}
+		if footerErr == nil && footerStart > 0 {
+			insertIdx = footerStart
+		}
+	}
+
+	// If still no insertion point, insert right before the last closing container tag
+	if insertIdx < 0 {
+		lastClose := strings.LastIndex(rawHtml, "</")
+		if lastClose > 0 {
+			insertIdx = lastClose
+		} else {
+			insertIdx = len(rawHtml)
+		}
+	}
+
+	newHtml := rawHtml[:insertIdx] + "\n\n" + strings.TrimSpace(newSectionHtml) + "\n\n" + rawHtml[insertIdx:]
+
+	validator := NewDuplicateValidator()
+	if err := validator.ValidateHTMLDuplicateIDs(newHtml); err != nil {
+		log.Printf("[TARGETED PATCHER] duplicate ID warning during section insertion: %v", err)
+	}
+
+	patchedFrame := *currentFrame
+	patchedFrame.RawHtml = newHtml
+	if patchedFrame.CodeExport == nil {
+		patchedFrame.CodeExport = make(map[string]string)
+	}
+	patchedFrame.CodeExport["html"] = newHtml
+	if patchedFrame.Implementation != nil {
+		implCopy := *patchedFrame.Implementation
+		implCopy.Source.HTML = newHtml
+		patchedFrame.Implementation = &implCopy
+	}
+	patchedFrame.ChangePlan = plan
+
+	// Extract new section ID and register into canonical sections list
+	secIdRe := regexp.MustCompile(`data-rl-id=["'](sec-[^"']+)["']`)
+	newSecID := ""
+	if m := secIdRe.FindStringSubmatch(newSectionHtml); len(m) > 1 {
+		newSecID = m[1]
+	} else {
+		newSecID = fmt.Sprintf("sec-%d", time.Now().UnixNano()%100000)
+	}
+	cleanType := strings.TrimPrefix(newSecID, "sec-")
+
+	newSectionDTO := dtos.UISectionDTO{
+		ID:                newSecID,
+		Type:              cleanType,
+		Purpose:           plan.Request,
+		Priority:          "medium",
+		RequirementSource: "user_chat",
+	}
+	patchedFrame.Sections = append(patchedFrame.Sections, newSectionDTO)
+	if patchedFrame.DesignState != nil && patchedFrame.DesignState.DesignSpec != nil {
+		patchedFrame.DesignState.DesignSpec.Sections = append(patchedFrame.DesignState.DesignSpec.Sections, newSectionDTO)
+	}
+
+	return &patchedFrame, fmt.Sprintf("Seksi baru `%s` berhasil ditambahkan (%s).", newSecID, plan.Request), nil
+}
+
+func (tp *TargetedPatcher) generateSectionMarkup(
+	ctx context.Context,
+	plan *dtos.ChangePlanDTO,
+	frame *dtos.UIFrameData,
+) (string, error) {
+	accentColor := "#6366f1"
+	themeMode := "dark"
+	if frame.Theme != nil {
+		if prim, ok := frame.Theme["primary"].(string); ok && prim != "" {
+			accentColor = prim
+		}
+		if m, ok := frame.Theme["mode"].(string); ok && m != "" {
+			themeMode = m
+		}
+	}
+
+	if tp.aiService == nil {
+		secID := fmt.Sprintf("sec-%d", time.Now().UnixNano()%100000)
+		return fmt.Sprintf(`<section data-rl-id="%s" class="w-full py-12 px-6"><div class="max-w-6xl mx-auto"><h2 class="text-2xl font-bold mb-4">%s</h2></div></section>`, secID, plan.Request), nil
+	}
+
+	titleContext := frame.Title
+	if titleContext == "" {
+		titleContext = "Visual Workspace UI"
+	}
+
+	device := "web"
+	if frame.Device != "" {
+		device = frame.Device
+	}
+
+	sysPrompt := fmt.Sprintf(`You are an expert Tailwind CSS UI section generator for RancangLab.
+Generate a SINGLE complete, bespoke, beautiful HTML section matching the user request.
+Context:
+- Project / Page: %s
+- Theme mode: %s
+- Accent color: %s
+- Target device: %s
+
+CRAFT & QUALITY RULES:
+1. Wrap everything in a single root <section data-rl-id="sec-[type]-[unique]" class="..."> tag.
+2. Every interactive element, heading, button, or card must have data-rl-id="cmp-[type]-[unique]".
+3. Use Pure Tailwind CSS utility classes exclusively. Harmonize surfaces, typography, border radius, and contrast with the existing %s theme.
+4. For timeline/roadmap/schedule requests: render a sophisticated vertical or horizontal timeline with chronological step cards, status indicators (done/active/pending badges), timestamps, and sleek connecting lines.
+5. Provide realistic, human microcopy and data. Do not use Lorem Ipsum.
+6. Output ONLY the raw HTML section, no markdown fences, no explanation.`, titleContext, themeMode, accentColor, device, themeMode)
+
+	userMsg := fmt.Sprintf(`Section Request: %q
+Page Device: %s`, plan.Request, device)
+
+	resp, err := tp.aiService.CallLLMText(sysPrompt, nil, userMsg)
+	if err != nil {
+		return "", err
+	}
+	clean := strings.TrimSpace(resp)
+	clean = strings.TrimPrefix(clean, "```html")
+	clean = strings.TrimPrefix(clean, "```")
+	clean = strings.TrimSuffix(clean, "```")
+	return strings.TrimSpace(clean), nil
 }

@@ -144,9 +144,37 @@ func (p *PatchEngine) ApplyPatch(
 		}
 	}
 
-	// Re-synchronize code_export from sections so code and visual preview remain 100% accurate
-	if len(patchedFrame.Sections) > 0 {
+	// Re-synchronize code_export and implementation while preserving existing model-authored HTML
+	currentHTML := patchedFrame.RawHtml
+	if currentHTML == "" && patchedFrame.CodeExport != nil {
+		currentHTML = patchedFrame.CodeExport["html"]
+	}
+	if currentHTML == "" && patchedFrame.Implementation != nil {
+		currentHTML = patchedFrame.Implementation.Source.HTML
+	}
+
+	if currentHTML != "" {
+		// Apply token updates like primary color in-place if changed
+		for _, change := range plan.Changes {
+			if change.Property == "primary_color" && change.From != "" && change.To != "" {
+				currentHTML = strings.ReplaceAll(currentHTML, change.From, change.To)
+			}
+		}
+		patchedFrame.RawHtml = currentHTML
+		if patchedFrame.CodeExport == nil {
+			patchedFrame.CodeExport = make(map[string]string)
+		}
+		patchedFrame.CodeExport["html"] = currentHTML
+		patchedFrame.CodeExport["tailwind"] = currentHTML
+		if _, hasVue := patchedFrame.CodeExport["vue"]; !hasVue || patchedFrame.CodeExport["vue"] == "" {
+			patchedFrame.CodeExport["vue"] = "<template>\n" + currentHTML + "\n</template>\n"
+		}
+	} else if len(patchedFrame.Sections) > 0 {
+		// Only fall back to generateVueCodeExport if no previous HTML existed
 		patchedFrame.CodeExport = generateVueCodeExport(patchedFrame.Title, patchedFrame.Sections, themeMode, accentColor)
+		if patchedFrame.CodeExport != nil {
+			patchedFrame.RawHtml = patchedFrame.CodeExport["html"]
+		}
 	}
 
 	// Synchronize canonical design state and implementation
@@ -154,9 +182,6 @@ func (p *PatchEngine) ApplyPatch(
 	if patchedFrame.Implementation != nil && patchedFrame.CodeExport != nil {
 		patchedFrame.Implementation.Source.Vue = patchedFrame.CodeExport["vue"]
 		patchedFrame.Implementation.Source.HTML = patchedFrame.CodeExport["html"]
-	}
-	if len(patchedFrame.Sections) > 0 {
-		patchedFrame.CodeExport = generateVueCodeExport(patchedFrame.Title, patchedFrame.Sections, themeMode, accentColor)
 	}
 
 	// Attach change plan to frame for developer transparency and inspector display

@@ -28,18 +28,19 @@ class Settings(BaseModel):
     
     # OpenAI & Compatible (9router / OpenRouter / Local) Configuration
     openai_api_key: str = get_env_any(["OPEN_AI_API_KEY", "OPENAI_API_KEY", "AI_API_KEY"], "sk-27534e0917d892bb-z0aum1-3e0637a7")
-    openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "ag/gemini-3.8-flash-high")
+    openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "ag/gemini-3.8-flash")
     openai_base_url: str = get_env_any(["OPEN_AI_BASE_URL", "OPENAI_BASE_URL", "AI_BASE_URL"], "http://localhost:20128/v1")
 
 settings = Settings()
 
-# Auto-replace localhost/127.0.0.1 with host.docker.internal only if host.docker.internal is resolvable (bridge mode)
+# Only replace localhost if host.docker.internal is explicitly present in /etc/hosts (bridge mode)
 try:
-    import socket
-    socket.gethostbyname("host.docker.internal")
-    if "localhost" in settings.openai_base_url:
-        settings.openai_base_url = settings.openai_base_url.replace("localhost", "host.docker.internal")
-    elif "127.0.0.1" in settings.openai_base_url:
-        settings.openai_base_url = settings.openai_base_url.replace("127.0.0.1", "host.docker.internal")
+    if os.path.exists("/etc/hosts"):
+        with open("/etc/hosts", "r") as _f:
+            if "host.docker.internal" in _f.read():
+                if "localhost" in settings.openai_base_url:
+                    settings.openai_base_url = settings.openai_base_url.replace("localhost", "host.docker.internal")
+                elif "127.0.0.1" in settings.openai_base_url:
+                    settings.openai_base_url = settings.openai_base_url.replace("127.0.0.1", "host.docker.internal")
 except Exception:
     pass

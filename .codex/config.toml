@@ -1,0 +1,4 @@
+# Project-scoped subagents are defined in .codex/agents/*.toml.
+# Inherit the session's model, reasoning effort, permissions, and concurrency defaults.
+[agents]
+enabled = true

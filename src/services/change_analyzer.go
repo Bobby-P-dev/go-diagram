@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
@@ -91,9 +92,123 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 	trimmed := strings.TrimSpace(rawRequest)
 	lower := strings.ToLower(trimmed)
 
+	// STRICT LOCALITY RULE -1: Add a NEW page/frame to the project (distinct from
+	// adding a section inside the current page). Triggers on explicit phrasing OR
+	// when the frontend chat scope is explicitly set to "+ Screen Baru" (target=page / scope=new_screen).
+	isExplicitNewFrameScope := (targetRef != nil && (targetRef.Type == "page" || targetRef.Type == "screen" || targetRef.Type == "frame")) ||
+		(selectionCtx != nil && (selectionCtx.Scope == "new_screen" || selectionCtx.Scope == "screen_new")) ||
+		strings.HasPrefix(lower, "screen baru:") ||
+		strings.HasPrefix(lower, "halaman baru:") ||
+		strings.HasPrefix(lower, "tambah screen") ||
+		strings.HasPrefix(lower, "tambahkan screen") ||
+		strings.HasPrefix(lower, "buat screen") ||
+		strings.HasPrefix(lower, "buatkan screen")
+
+	pageType, device, isNewFrame := detectInsertFrameIntent(lower)
+	if isNewFrame || isExplicitNewFrameScope {
+		if pageType == "" {
+			pageType = detectInsertFramePageType(lower)
+			if pageType == "" {
+				pageType = "new_page"
+			}
+		}
+		if device == "" {
+			if currentFrame != nil && currentFrame.Device != "" {
+				device = currentFrame.Device
+			} else {
+				device = "web"
+			}
+		}
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "structural",
+			Operation:      dtos.OpInsertFrame,
+			Target: dtos.TargetElementDTO{
+				Type:      "page",
+				Property:  "new_page",
+				SectionID: pageType,
+				Device:    device,
+			},
+			RequestedChanges:      []string{trimmed},
+			Scope:                 "project",
+			Strategy:              "insert_frame",
+			Preserve:              []string{"all existing frames"},
+			PreserveOutsideTarget: true,
+			Regenerate:            true,
+		}, nil
+	}
+
 	// STRICT LOCALITY RULE 0: Explicit Section Insert / Delete / Reorder
-	if strings.Contains(lower, "tambah") || strings.Contains(lower, "add section") || strings.Contains(lower, "insert section") {
+	sectionFeatureKeywords := []string{
+		"timeline", "jadwal", "roadmap", "riwayat",
+		"faq", "tanya jawab", "pertanyaan",
+		"testimoni", "testimonial", "review", "ulasan",
+		"pricing", "harga", "paket", "biaya",
+		"fitur", "features", "keunggulan",
+		"tentang", "about", "story", "cerita",
+		"kontak", "contact", "hubungi",
+		"galeri", "gallery", "portfolio", "portofolio",
+		"tim", "team", "struktur",
+		"partner", "klien", "client", "sponsor", "rekanan",
+		"cta", "call to action",
+		"newsletter", "langganan",
+		"statistik", "stats", "angka", "metrik",
+		"alur", "langkah", "steps", "cara kerja", "how it works",
+	}
+
+	hasAddVerb := strings.Contains(lower, "tambah") ||
+		strings.Contains(lower, "buatkan juga") ||
+		strings.Contains(lower, "tambahkan juga") ||
+		strings.Contains(lower, "buatkan") ||
+		strings.Contains(lower, "buat") ||
+		strings.Contains(lower, "bikin") ||
+		strings.Contains(lower, "bikinkan") ||
+		strings.Contains(lower, "insert") ||
+		strings.Contains(lower, "add") ||
+		strings.Contains(lower, "sisipkan") ||
+		strings.Contains(lower, "sertakan")
+
+	hasSectionNoun := strings.Contains(lower, "section") ||
+		strings.Contains(lower, "seksi") ||
+		strings.Contains(lower, "bagian")
+
+	hasFeatureNoun := false
+	for _, kw := range sectionFeatureKeywords {
+		if strings.Contains(lower, kw) {
+			hasFeatureNoun = true
+			break
+		}
+	}
+
+	isDeleteVerb := strings.Contains(lower, "hapus") ||
+		strings.Contains(lower, "delete") ||
+		strings.Contains(lower, "remove") ||
+		strings.Contains(lower, "buang") ||
+		strings.Contains(lower, "hilangkan")
+
+	// Guard against item-level addition inside an already selected section
+	isItemLevelAdd := false
+	if targetRef != nil && targetRef.ID != "" && strings.HasPrefix(targetRef.ID, "sec-") {
+		targetPrefix := strings.TrimPrefix(targetRef.ID, "sec-")
+		if strings.Contains(lower, targetPrefix) && (strings.Contains(lower, "item") || strings.Contains(lower, "kartu") || strings.Contains(lower, "card") || strings.Contains(lower, "tombol") || strings.Contains(lower, "button")) {
+			isItemLevelAdd = true
+		}
+	}
+
+	isSectionInsert := false
+	if !isDeleteVerb && !isItemLevelAdd {
+		if reExplicitSectionInsert.MatchString(lower) ||
+			(hasAddVerb && (hasSectionNoun || hasFeatureNoun || strings.Contains(lower, "menu "))) ||
+			((strings.Contains(lower, "tambah") || strings.Contains(lower, "insert")) && (strings.Contains(lower, "setelah") || strings.Contains(lower, "after"))) {
+			isSectionInsert = true
+		}
+	}
+
+	if isSectionInsert {
 		targetSec := ""
+		if targetRef != nil && targetRef.ID != "" && strings.HasPrefix(targetRef.ID, "sec-") {
+			targetSec = targetRef.ID
+		}
 		if strings.Contains(lower, "setelah") {
 			parts := strings.Split(lower, "setelah")
 			if len(parts) > 1 {
@@ -111,6 +226,7 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 			Operation:      dtos.OpInsertSection,
 			Target: dtos.TargetElementDTO{
 				Type:      "section",
+				ID:        targetSec,
 				SectionID: targetSec,
 			},
 			RequestedChanges:      []string{trimmed},
@@ -122,12 +238,15 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 		}, nil
 	}
 
-	if strings.Contains(lower, "hapus section") || strings.Contains(lower, "hapus seksi") || strings.Contains(lower, "delete section") || strings.Contains(lower, "remove section") {
+	isSectionDelete := strings.Contains(lower, "hapus section") || strings.Contains(lower, "hapus seksi") ||
+		strings.Contains(lower, "delete section") || strings.Contains(lower, "remove section") ||
+		strings.Contains(lower, "buang section") || strings.Contains(lower, "hilangkan section")
+	if isSectionDelete {
 		delTarget := ""
 		if targetRef != nil && targetRef.ID != "" {
 			delTarget = targetRef.ID
 		} else {
-			for _, kw := range []string{"testimonial", "review", "spotlight", "product", "hero", "footer"} {
+			for _, kw := range []string{"testimonial", "review", "spotlight", "product", "hero", "footer", "faq", "features", "pricing"} {
 				if strings.Contains(lower, kw) {
 					delTarget = "sec-" + kw
 					break
@@ -270,7 +389,7 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 		}, nil
 	}
 
-	if strings.Contains(lower, "produk") || strings.Contains(lower, "product") || strings.Contains(lower, "menu") || strings.Contains(lower, "katalog") {
+	if strings.Contains(lower, "produk") || strings.Contains(lower, "product") || strings.Contains(lower, "katalog") || strings.Contains(lower, "daftar menu") || strings.Contains(lower, "menu makanan") || strings.Contains(lower, "menu resto") {
 		return &dtos.ChangePlanDTO{
 			Request:        trimmed,
 			Classification: "layout",
@@ -287,6 +406,29 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 				"hero",
 				"story",
 				"testimonials",
+				"footer",
+				"page theme",
+			},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	if strings.Contains(lower, "timeline") || strings.Contains(lower, "jadwal") || strings.Contains(lower, "roadmap") {
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "layout",
+			Target: dtos.TargetElementDTO{
+				Type:      "section",
+				ID:        "sec-timeline",
+				SectionID: "sec-timeline",
+			},
+			RequestedChanges: []string{trimmed},
+			Scope:            "section",
+			Strategy:         "section_patch",
+			Preserve: []string{
+				"header",
+				"hero",
 				"footer",
 				"page theme",
 			},
@@ -586,12 +728,19 @@ func ensureOperationType(plan *dtos.ChangePlanDTO) {
 		return
 	}
 	lowerReq := strings.ToLower(plan.Request)
-	if strings.Contains(lowerReq, "tambah") || strings.Contains(lowerReq, "add section") || strings.Contains(lowerReq, "insert") {
+	// If explicit insert frame
+	if plan.Strategy == "insert_frame" || plan.Scope == "project" {
+		plan.Operation = dtos.OpInsertFrame
+		return
+	}
+	// Section addition ONLY when explicitly targeting a section
+	if (strings.Contains(lowerReq, "section") || strings.Contains(lowerReq, "seksi")) &&
+		(strings.Contains(lowerReq, "tambah") || strings.Contains(lowerReq, "buat") || strings.Contains(lowerReq, "bikin") || strings.Contains(lowerReq, "add") || strings.Contains(lowerReq, "insert") || strings.Contains(lowerReq, "create")) {
 		plan.Operation = dtos.OpInsertSection
 		plan.Strategy = "insert_section"
 		return
 	}
-	if strings.Contains(lowerReq, "hapus section") || strings.Contains(lowerReq, "delete section") || strings.Contains(lowerReq, "buang section") {
+	if strings.Contains(lowerReq, "hapus section") || strings.Contains(lowerReq, "delete section") || strings.Contains(lowerReq, "buang section") || strings.Contains(lowerReq, "hapus seksi") {
 		plan.Operation = dtos.OpDeleteSection
 		plan.Strategy = "delete_section"
 		return
@@ -614,4 +763,183 @@ func ensureOperationType(plan *dtos.ChangePlanDTO) {
 		return
 	}
 	plan.Operation = dtos.OpSectionPatch
+}
+
+var (
+	// Verbs indicating creation/addition of a new entity
+	insertFrameActionVerbs = `(?:tambah(?:kan)?|menambahkan|buat(?:kan)?|membuat|bikin(?:kan)?|create|add|generate|insert|new)`
+
+	// Nouns representing a canvas frame / screen / page
+	insertFramePageNouns = `(?:halaman(?:nya)?|screen(?:nya|s)?|page(?:nya|s)?|frame(?:nya|s)?|layar(?:nya)?)`
+
+	// Direct creation: e.g. "tambahkan halaman", "buatkan screen", "add page", "tambah login page", "buatkan register screen"
+	reDirectFrameInsert = regexp.MustCompile(fmt.Sprintf(
+		`(?i)\b%s\s+(?:(?:sebuah|suatu|1|satu|desain|design|tampilan)\s+)?(?:[a-z0-9_-]+\s+){0,2}%s\b`,
+		insertFrameActionVerbs, insertFramePageNouns,
+	))
+
+	// Noun followed by "baru", "kedua", "ketiga", "lain", "selanjutnya", "berikutnya", "new", "another", "second", "next"
+	// e.g. "halaman baru", "screen baru", "page baru", "halaman kedua", "new page"
+	reNewPagePost = regexp.MustCompile(fmt.Sprintf(
+		`(?i)\b%s\s+(?:baru|kedua|ke-2|ke\s+2|ketiga|ke-3|lain|selanjutnya|berikutnya|new|another|second|next)\b`,
+		insertFramePageNouns,
+	))
+
+	// Noun followed by "untuk" / "buat" / "for" e.g. "halaman baru untuk profil", "halaman untuk login"
+	rePageFor = regexp.MustCompile(fmt.Sprintf(
+		`(?i)\b(?:%s\s+)?%s\s+(?:baru\s+)?(?:untuk|buat|for)\s+[a-z0-9_-]+`,
+		insertFrameActionVerbs, insertFramePageNouns,
+	))
+
+	// Adding another/additional frame: e.g. "tambah 1 halaman lagi", "tambah page lagi"
+	rePageAgain = regexp.MustCompile(fmt.Sprintf(
+		`(?i)\b%s\s+(?:(?:satu|1)\s+)?%s\s+lagi\b`,
+		insertFrameActionVerbs, insertFramePageNouns,
+	))
+
+	// Section exclusions: if the prompt is explicitly targeting a section
+	reSectionAction = regexp.MustCompile(`(?i)\b(?:tambah(?:kan)?|buat(?:kan)?|bikin(?:kan)?|add|create|insert|hapus|delete|remove)\s+(?:seksi|section)\b`)
+
+	// Explicit section insert intent
+	reExplicitSectionInsert = regexp.MustCompile(`(?i)\b(?:tambah(?:kan)?|buat(?:kan)?|bikin(?:kan)?|add|create|insert|sisipkan)\s+(?:seksi|section)\b`)
+
+	// Prepositional guard: e.g. "ke halaman", "di halaman", "pada screen", "to page", "in frame"
+	// where something else is being added into the page
+	reComponentIntoPage = regexp.MustCompile(fmt.Sprintf(
+		`(?i)\b(?:tombol|button|input|field|form|card|kartu|gambar|image|foto|teks|text|icon|ikon|navbar|header|footer|tabel|table|link|modal|popup)\b.*?\b(?:di|ke|pada|dalam|to|into|in|on)\s+%s\b`,
+		insertFramePageNouns,
+	))
+
+	// Structural rebuild verbs that modify existing page rather than adding a new one
+	reRebuildPage = regexp.MustCompile(fmt.Sprintf(
+		`(?i)\b(?:ubah|ganti|convert|rebuild|jadikan)\b.*?\b%s\b.*?\b(?:menjadi|jadi|into|to)\b`,
+		insertFramePageNouns,
+	))
+)
+
+// newFrameMarkers are explicit phrasings that clearly ask for a NEW page/frame (kept as secondary backup).
+var newFrameMarkers = []string{
+	"tambah halaman", "tambah screen", "tambah frame", "tambah page",
+	"tambahkan halaman", "tambahkan screen", "tambahkan frame", "tambahkan page",
+	"buat halaman", "buat screen", "buat frame", "buat page",
+	"buatkan halaman", "buatkan screen", "buatkan frame", "buatkan page",
+	"bikin halaman", "bikin screen", "bikin frame", "bikin page",
+	"create page", "create screen", "add page", "add screen", "add frame",
+	"new page", "new screen", "new frame",
+	"tambah design", "buat design", "tambah desain", "buat desain",
+	"tambah projek", "buat projek",
+}
+
+// insertFramePageTypeMarkers are recognized page-type keywords used to build the
+// new frame's design hint (title + synthesis prompt).
+var insertFramePageTypeMarkers = map[string]string{
+	"pricing":       "pricing",
+	"harga":         "pricing",
+	"register":      "register",
+	"registrasi":    "register",
+	"signup":        "register",
+	"daftar":        "register",
+	"dashboard":     "dashboard",
+	"profil":        "profile",
+	"profile":       "profile",
+	"login":         "login",
+	"masuk":         "login",
+	"auth":          "login",
+	"landing":       "landing",
+	"home":          "landing",
+	"beranda":       "landing",
+	"checkout":      "checkout",
+	"bayar":         "checkout",
+	"pembayaran":    "checkout",
+	"cart":          "cart",
+	"keranjang":     "cart",
+	"table":         "data_table",
+	"tabel":         "data_table",
+	"invoice":       "invoice",
+	"billing":       "billing",
+	"tagihan":       "billing",
+	"settings":      "settings",
+	"pengaturan":    "settings",
+	"setelan":       "settings",
+	"onboarding":    "onboarding",
+	"account":       "account",
+	"akun":          "account",
+	"detail":        "detail",
+	"produk":        "product",
+	"product":       "product",
+	"analytics":     "analytics",
+	"analitik":      "analytics",
+	"marketplace":   "marketplace",
+	"kontak":        "contact",
+	"contact":       "contact",
+	"faq":           "faq",
+	"tentang":       "about",
+	"about":         "about",
+	"order":         "order",
+	"pesanan":       "order",
+	"transaksi":     "transaction",
+	"transaction":   "transaction",
+	"katalog":       "catalog",
+	"catalog":       "catalog",
+	"timeline":      "timeline",
+	"jadwal":        "timeline",
+	"roadmap":       "timeline",
+}
+
+// detectInsertFrameIntent returns true when the request explicitly asks for a NEW
+// page/frame. It also derives a page-type hint and a device (mobile/desktop/web)
+// from the prompt. Falling back conservatively avoids mis-classifying patches.
+func detectInsertFrameIntent(lower string) (pageType, device string, ok bool) {
+	// Guard 1: If prompt explicitly targets a section, it's not a frame insertion
+	if reSectionAction.MatchString(lower) {
+		return "", "", false
+	}
+	// Guard 2: If a component is being placed into the existing page
+	if reComponentIntoPage.MatchString(lower) {
+		return "", "", false
+	}
+	// Guard 3: If modifying/rebuilding existing page into another
+	if reRebuildPage.MatchString(lower) {
+		return "", "", false
+	}
+
+	explicit := false
+	if reDirectFrameInsert.MatchString(lower) ||
+		reNewPagePost.MatchString(lower) ||
+		rePageFor.MatchString(lower) ||
+		rePageAgain.MatchString(lower) {
+		explicit = true
+	} else {
+		for _, m := range newFrameMarkers {
+			if strings.Contains(lower, m) {
+				explicit = true
+				break
+			}
+		}
+	}
+
+	if !explicit {
+		return "", "", false
+	}
+
+	pageType = detectInsertFramePageType(lower)
+	if pageType == "" {
+		pageType = "new_page"
+	}
+	device = "web"
+	if strings.Contains(lower, "mobile") || strings.Contains(lower, "smartphone") || strings.Contains(lower, "ponsel") || strings.Contains(lower, "hp ") || strings.HasSuffix(lower, "hp") {
+		device = "mobile"
+	} else if strings.Contains(lower, "desktop") {
+		device = "desktop"
+	}
+	return pageType, device, true
+}
+
+func detectInsertFramePageType(lower string) string {
+	for kw, norm := range insertFramePageTypeMarkers {
+		if strings.Contains(lower, kw) {
+			return norm
+		}
+	}
+	return ""
 }

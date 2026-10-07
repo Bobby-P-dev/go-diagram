@@ -5,6 +5,8 @@ capturing real screenshots for multimodal Visual Design Critic evaluation.
 """
 
 import os
+import json
+import re
 import shutil
 import base64
 import tempfile
@@ -37,52 +39,50 @@ def find_browser_binary() -> Optional[str]:
 
     return None
 
-def wrap_with_full_document(html_content: str) -> str:
-    """Wraps HTML fragment into a complete self-contained document with Tailwind CDN & fonts."""
-    if "<!DOCTYPE html>" in html_content or "<html" in html_content:
-        return html_content
+def wrap_with_full_document(html_content: str, theme: Optional[Dict[str, Any]] = None) -> str:
+    """Match the canvas fragment baseline while preserving authored full documents.
 
+    Fonts, styles, and layout authored in the artifact take precedence over these
+    defaults. Review must not introduce a dark canvas or serif pairing of its own.
+    """
+    if re.search(r"<!doctype\s+html|<html(?:\s|>)", html_content, re.IGNORECASE):
+        return html_content
+    theme = theme or {}
+    is_dark = theme.get("mode") == "dark"
+    primary = theme.get("primary")
+    colors = {"brand": primary, "primary": primary} if isinstance(primary, str) and primary else {}
+    config = json.dumps({"darkMode": "class", "theme": {"extend": {"colors": colors}}}).replace("<", "\\u003c")
+    dark_class = ' class="dark"' if is_dark else ""
+    background = "#020617" if is_dark else "transparent"
+    foreground = "#f1f5f9" if is_dark else "inherit"
     return f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="en"{dark_class}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sandbox UI Render</title>
+  <title>UI viewport review</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = {config};</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Playfair+Display:ital,wght@0,500;0,700;1,500&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
-  <script>
-    tailwind.config = {{
-      theme: {{
-        extend: {{
-          fontFamily: {{
-            sans: ['Inter', 'sans-serif'],
-            serif: ['Playfair Display', 'serif'],
-            mono: ['JetBrains Mono', 'monospace'],
-          }},
-        }}
-      }}
-    }}
-  </script>
   <style>
     body {{
-      margin: 0;
-      padding: 0;
-      -webkit-font-smoothing: antialiased;
+      margin: 0; padding: 0; min-height: 100vh;
+      background-color: {background}; color: {foreground};
     }}
   </style>
 </head>
-<body class="bg-slate-950 text-slate-100 min-h-screen">
+<body{dark_class}>
 {html_content}
 </body>
 </html>"""
 
 def render_html_to_screenshot(
     html_content: str,
-    width: int = 1440,
-    height: int = 900,
+    width: int = 1024,
+    height: int = 720,
     timeout_sec: int = 15,
+    theme: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Renders HTML inside headless Chrome/Chromium and returns base64 PNG data URI.
@@ -94,10 +94,15 @@ def render_html_to_screenshot(
 
     browser_bin = find_browser_binary()
     if not browser_bin:
-        logger.warning("No Chrome or Chromium binary found. Visual Critic will fallback to structured inspection.")
+        logger.warning("No Chrome or Chromium binary found. Visual review is unavailable.")
         return None
 
-    full_html = wrap_with_full_document(html_content)
+    # The caller supplies actual artifact viewport dimensions, not a marketing
+    # desktop width. Bound process resources even for malformed metadata.
+    width = max(240, min(int(width), 3840))
+    height = max(240, min(int(height), 2160))
+    timeout_sec = max(1, min(int(timeout_sec), 30))
+    full_html = wrap_with_full_document(html_content, theme)
 
     tmp_html = None
     tmp_png = None
@@ -118,6 +123,12 @@ def render_html_to_screenshot(
             "--no-sandbox",
             "--disable-dev-shm-usage",
             "--hide-scrollbars",
+            "--force-device-scale-factor=1",
+            "--run-all-compositor-stages-before-draw",
+            # Allow CDN styles, fonts, and image decoding a bounded settling window.
+            # This is best-effort readiness, not proof that every remote asset loaded.
+            "--virtual-time-budget=3000",
+            f"--timeout={max(500, (timeout_sec - 1) * 1000)}",
             f"--window-size={width},{height}",
             f"--screenshot={tmp_png}",
             f"file://{tmp_html}",

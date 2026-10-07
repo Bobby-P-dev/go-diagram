@@ -1,10 +1,12 @@
 package services
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -16,11 +18,12 @@ import (
 )
 
 type AIService struct {
-	client   *http.Client
-	provider string
-	apiKey   string
-	model    string
-	baseURL  string
+	client    *http.Client
+	provider  string
+	apiKey    string
+	model     string
+	baseURL   string
+	maxTokens int
 }
 
 func NewAIService() *AIService {
@@ -48,14 +51,20 @@ func NewAIService() *AIService {
 		baseURL = config.Env.AnthropicBaseURL
 	}
 
+	maxTokens := config.Env.AIMaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 16384
+	}
+
 	return &AIService{
 		client: &http.Client{
-			Timeout: 180 * time.Second,
+			Timeout: 300 * time.Second,
 		},
-		provider: provider,
-		apiKey:   apiKey,
-		model:    model,
-		baseURL:  baseURL,
+		provider:  provider,
+		apiKey:    apiKey,
+		model:     model,
+		baseURL:   baseURL,
+		maxTokens: maxTokens,
 	}
 }
 
@@ -329,11 +338,23 @@ func (s *AIService) GenerateDiagram(
 	}, chatAssistantMessage, nil
 }
 
+type LLMStreamCallback func(delta string, totalTokens int)
+
 func (s *AIService) callOpenAI(
 	systemPrompt string,
 	historyMessages []entities.ChatMessage,
 	newPrompt string,
 	responseFormat *dtos.ResponseFormatOpenAI,
+) (string, error) {
+	return s.callOpenAIWithCallback(systemPrompt, historyMessages, newPrompt, responseFormat, nil)
+}
+
+func (s *AIService) callOpenAIWithCallback(
+	systemPrompt string,
+	historyMessages []entities.ChatMessage,
+	newPrompt string,
+	responseFormat *dtos.ResponseFormatOpenAI,
+	onChunk LLMStreamCallback,
 ) (string, error) {
 	// Di OpenAI, System Prompt dimasukkan sebagai message pertama dengan role "system"
 	var openAIMessages []dtos.MessageOpenAI
@@ -360,11 +381,26 @@ func (s *AIService) callOpenAI(
 		})
 	}
 
+	type chatCompletionChunk struct {
+		Choices []struct {
+			Delta struct {
+				Content string `json:"content"`
+				Role    string `json:"role"`
+			} `json:"delta"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
+		Usage *struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+
 	reqBody := dtos.ChatRequestOpenAI{
 		Model:          s.model,
 		Messages:       openAIMessages,
-		Stream:         false,
-		MaxTokens:      8192,
+		Stream:         true,
+		MaxTokens:      s.maxTokens,
 		ResponseFormat: responseFormat,
 	}
 
@@ -373,10 +409,7 @@ func (s *AIService) callOpenAI(
 		return "", fmt.Errorf("failed to marshal OpenAI request body: %w", err)
 	}
 
-	var respBytes []byte
-	var respStatusCode int
 	maxAttempts := 3
-
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		req, err := http.NewRequest(http.MethodPost, s.baseURL, bytes.NewReader(bodyBytes))
 		if err != nil {
@@ -384,6 +417,8 @@ func (s *AIService) callOpenAI(
 		}
 
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream, application/json")
+		req.Header.Set("User-Agent", "curl/8.5.0")
 		if s.apiKey != "" {
 			req.Header.Set("Authorization", "Bearer "+s.apiKey)
 		}
@@ -397,55 +432,114 @@ func (s *AIService) callOpenAI(
 			continue
 		}
 
-		respBytes, err = io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		if err != nil {
-			if attempt == maxAttempts {
-				return "", fmt.Errorf("failed to read response body: %w", err)
-			}
-			time.Sleep(time.Duration(attempt) * 1500 * time.Millisecond)
-			continue
-		}
-
-		respStatusCode = resp.StatusCode
-		if respStatusCode == 503 || respStatusCode == 529 || respStatusCode == 429 {
+		respStatusCode := resp.StatusCode
+		if respStatusCode == 503 || respStatusCode == 529 || respStatusCode == 429 || respStatusCode == 524 {
+			resp.Body.Close()
 			if attempt < maxAttempts {
 				time.Sleep(time.Duration(attempt) * 2000 * time.Millisecond)
 				continue
 			}
 		}
 
-		break
-	}
-
-	if respStatusCode != http.StatusOK {
-		trimmed := strings.TrimSpace(string(respBytes))
-		if respStatusCode == http.StatusGatewayTimeout || respStatusCode == http.StatusBadGateway || strings.HasPrefix(trimmed, "<") {
-			return "", fmt.Errorf("AI router gateway timeout (HTTP %d from %s): model '%s' took more than 90s to generate. Upstream proxy timed out", respStatusCode, s.baseURL, s.model)
+		if respStatusCode != http.StatusOK {
+			respBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			trimmed := strings.TrimSpace(string(respBytes))
+			if respStatusCode == http.StatusGatewayTimeout || respStatusCode == http.StatusBadGateway || respStatusCode == 524 || strings.HasPrefix(trimmed, "<") {
+				return "", fmt.Errorf("AI router gateway timeout (HTTP %d from %s): model '%s' took too long or proxy timed out: %s", respStatusCode, s.baseURL, s.model, trimmed)
+			}
+			var errResp dtos.ChatResponseOpenAI
+			if err := json.Unmarshal(respBytes, &errResp); err == nil && errResp.Error != nil && errResp.Error.Message != "" {
+				return "", fmt.Errorf("OpenAI API error (HTTP %d): %s", respStatusCode, errResp.Error.Message)
+			}
+			return "", fmt.Errorf("OpenAI API returned status %d: %s", respStatusCode, trimmed)
 		}
-		var errResp dtos.ChatResponseOpenAI
-		if err := json.Unmarshal(respBytes, &errResp); err == nil && errResp.Error != nil && errResp.Error.Message != "" {
-			return "", fmt.Errorf("OpenAI API error (HTTP %d): %s", respStatusCode, errResp.Error.Message)
+
+		// Handle SSE Streaming (keeps connection alive, avoids Cloudflare 524 timeout)
+		contentType := resp.Header.Get("Content-Type")
+		if strings.Contains(contentType, "text/event-stream") {
+			scanner := bufio.NewScanner(resp.Body)
+			buf := make([]byte, 1024*1024)
+			scanner.Buffer(buf, 10*1024*1024)
+
+			var sb strings.Builder
+			var lastFinishReason string
+			var completionTokens int
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, ":") {
+					continue
+				}
+				if line == "data: [DONE]" {
+					break
+				}
+				if strings.HasPrefix(line, "data: ") {
+					dataPayload := strings.TrimPrefix(line, "data: ")
+					var chunk chatCompletionChunk
+					if err := json.Unmarshal([]byte(dataPayload), &chunk); err == nil {
+						if len(chunk.Choices) > 0 {
+							delta := chunk.Choices[0].Delta.Content
+							sb.WriteString(delta)
+							if onChunk != nil && delta != "" {
+								onChunk(delta, completionTokens)
+							}
+							if chunk.Choices[0].FinishReason != "" {
+								lastFinishReason = chunk.Choices[0].FinishReason
+							}
+						}
+						if chunk.Usage != nil {
+							completionTokens = chunk.Usage.CompletionTokens
+						}
+					}
+				}
+			}
+			resp.Body.Close()
+
+			rawText := sb.String()
+			log.Printf("[AIService] Streamed response completed: length=%d chars, completion_tokens=%d, finish_reason=%q",
+				len(rawText), completionTokens, lastFinishReason)
+			if lastFinishReason == "length" {
+				log.Printf("[AIService] WARNING: LLM output was truncated by length limit (max_tokens=%d)!", s.maxTokens)
+			}
+			if strings.TrimSpace(rawText) == "" {
+				return "", fmt.Errorf("empty stream content received from OpenAI API")
+			}
+			return rawText, nil
 		}
-		return "", fmt.Errorf("OpenAI API returned status %d: %s", respStatusCode, trimmed)
+
+		// Fallback for standard non-streaming response
+		respBytes, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			if attempt == maxAttempts {
+				return "", fmt.Errorf("failed to read response body: %w", err)
+			}
+			continue
+		}
+
+		var openAIResp dtos.ChatResponseOpenAI
+		if err := json.Unmarshal(respBytes, &openAIResp); err != nil {
+			return "", fmt.Errorf("failed to unmarshal OpenAI response: %w: %s", err, string(respBytes))
+		}
+		if len(openAIResp.Choices) == 0 {
+			return "", fmt.Errorf("empty choices in OpenAI response: %s", string(respBytes))
+		}
+
+		choice := openAIResp.Choices[0]
+		log.Printf("[AIService] Token usage: prompt=%d, completion=%d, total=%d, finish_reason=%q (requested_max=%d)",
+			openAIResp.Usage.PromptTokens, openAIResp.Usage.CompletionTokens, openAIResp.Usage.TotalTokens, choice.FinishReason, s.maxTokens)
+		if choice.FinishReason == "length" {
+			log.Printf("[AIService] WARNING: LLM output was truncated by length limit (completion_tokens=%d, max_tokens=%d)!", openAIResp.Usage.CompletionTokens, s.maxTokens)
+		}
+
+		rawText := choice.Message.Content
+		if strings.TrimSpace(rawText) == "" {
+			return "", fmt.Errorf("no content in OpenAI response: %s", string(respBytes))
+		}
+		return rawText, nil
 	}
 
-	var openAIResp dtos.ChatResponseOpenAI
-	if err := json.Unmarshal(respBytes, &openAIResp); err != nil {
-		return "", fmt.Errorf("failed to unmarshal OpenAI response: %w: %s", err, string(respBytes))
-	}
-
-	if len(openAIResp.Choices) == 0 {
-		return "", fmt.Errorf("empty choices in OpenAI response: %s", string(respBytes))
-	}
-
-	rawText := openAIResp.Choices[0].Message.Content
-	if strings.TrimSpace(rawText) == "" {
-		return "", fmt.Errorf("no content in OpenAI response: %s", string(respBytes))
-	}
-
-	return rawText, nil
+	return "", fmt.Errorf("failed to call OpenAI API after %d attempts", maxAttempts)
 }
 
 func (s *AIService) callAnthropic(
@@ -495,7 +589,7 @@ func (s *AIService) callAnthropic(
 
 	reqBody := anthropicRequest{
 		Model:     s.model,
-		MaxTokens: 8192,
+		MaxTokens: s.maxTokens,
 		System:    systemPrompt,
 		Messages:  consolidatedMessages,
 	}
@@ -596,6 +690,18 @@ func (s *AIService) CallLLM(systemPrompt string, historyMessages []entities.Chat
 	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
 }
 
+func (s *AIService) CallLLMStream(
+	systemPrompt string,
+	historyMessages []entities.ChatMessage,
+	newPrompt string,
+	onChunk LLMStreamCallback,
+) (string, error) {
+	if s.provider == "openai" {
+		return s.callOpenAIWithCallback(systemPrompt, historyMessages, newPrompt, &dtos.ResponseFormatOpenAI{Type: "json_object"}, onChunk)
+	}
+	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+}
+
 func (s *AIService) CallLLMText(systemPrompt string, historyMessages []entities.ChatMessage, newPrompt string) (string, error) {
 	if s.provider == "openai" {
 		return s.callOpenAI(systemPrompt, historyMessages, newPrompt, nil)
@@ -619,21 +725,115 @@ func sanitizeJSONResponse(raw string) string {
 
 	if matches := codeBlockRegex.FindStringSubmatch(trimmed); len(matches) > 1 {
 		trimmed = strings.TrimSpace(matches[1])
-	}
-
-	start := strings.Index(trimmed, "{")
-	end := strings.LastIndex(trimmed, "}")
-	if start != -1 && end != -1 && end > start {
-		trimmed = strings.TrimSpace(trimmed[start : end+1])
 	} else {
-		trimmed = strings.TrimPrefix(trimmed, "```json")
-		trimmed = strings.TrimPrefix(trimmed, "```")
-		trimmed = strings.TrimSuffix(trimmed, "```")
+		if strings.HasPrefix(trimmed, "```json") {
+			trimmed = strings.TrimPrefix(trimmed, "```json")
+		} else if strings.HasPrefix(trimmed, "```") {
+			trimmed = strings.TrimPrefix(trimmed, "```")
+		}
+		if strings.HasSuffix(trimmed, "```") {
+			trimmed = strings.TrimSuffix(trimmed, "```")
+		}
 		trimmed = strings.TrimSpace(trimmed)
 	}
 
-	// Remove trailing commas before closing curly braces or brackets
-	trimmed = trailingCommaRegex.ReplaceAllString(trimmed, "$1")
+	// Find the start of the JSON object or array
+	startObj := strings.Index(trimmed, "{")
+	startArr := strings.Index(trimmed, "[")
+	start := -1
+	if startObj != -1 && (startArr == -1 || startObj < startArr) {
+		start = startObj
+	} else if startArr != -1 {
+		start = startArr
+	}
 
-	return trimmed
+	if start == -1 {
+		return trimmed
+	}
+	trimmed = trimmed[start:]
+
+	// Scan through JSON tracking depth, strings, escaped characters, and escape literal newlines in strings
+	var stack []byte
+	var out strings.Builder
+	out.Grow(len(trimmed) + 32)
+	inString := false
+	escaped := false
+	rootClosed := false
+
+	for i := 0; i < len(trimmed); i++ {
+		ch := trimmed[i]
+
+		if rootClosed {
+			break
+		}
+
+		if escaped {
+			escaped = false
+			out.WriteByte(ch)
+			continue
+		}
+
+		if ch == '\\' {
+			if inString {
+				escaped = true
+			}
+			out.WriteByte(ch)
+			continue
+		}
+
+		if ch == '"' {
+			inString = !inString
+			out.WriteByte(ch)
+			continue
+		}
+
+		if inString {
+			// Escape unescaped control characters inside JSON strings
+			if ch == '\n' {
+				out.WriteString(`\n`)
+			} else if ch == '\r' {
+				out.WriteString(`\r`)
+			} else if ch == '\t' {
+				out.WriteString(`\t`)
+			} else {
+				out.WriteByte(ch)
+			}
+			continue
+		}
+
+		out.WriteByte(ch)
+		if ch == '{' || ch == '[' {
+			stack = append(stack, ch)
+		} else if ch == '}' || ch == ']' {
+			if len(stack) > 0 {
+				top := stack[len(stack)-1]
+				if (top == '{' && ch == '}') || (top == '[' && ch == ']') {
+					stack = stack[:len(stack)-1]
+					if len(stack) == 0 {
+						rootClosed = true
+					}
+				}
+			}
+		}
+	}
+
+	// Auto-repair if truncated before root was closed
+	if !rootClosed {
+		if inString {
+			out.WriteByte('"')
+		}
+		for i := len(stack) - 1; i >= 0; i-- {
+			if stack[i] == '{' {
+				out.WriteByte('}')
+			} else if stack[i] == '[' {
+				out.WriteByte(']')
+			}
+		}
+	}
+
+	res := out.String()
+	// Remove trailing commas before closing curly braces or brackets
+	res = trailingCommaRegex.ReplaceAllString(res, "$1")
+
+	return res
 }

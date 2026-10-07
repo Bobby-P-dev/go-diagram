@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
@@ -12,6 +13,7 @@ type UIDesignCompiler struct {
 	analyzer  *RequirementAnalyzer
 	planner   *DesignPlanner
 	validator *UIValidator
+	aiService *AIService
 }
 
 func NewUIDesignCompiler(aiService *AIService) *UIDesignCompiler {
@@ -19,6 +21,7 @@ func NewUIDesignCompiler(aiService *AIService) *UIDesignCompiler {
 		analyzer:  NewRequirementAnalyzer(aiService),
 		planner:   NewDesignPlanner(aiService),
 		validator: NewUIValidator(),
+		aiService: aiService,
 	}
 }
 
@@ -30,27 +33,40 @@ func (c *UIDesignCompiler) Compile(
 	themeMode string,
 	accentColor string,
 ) (*dtos.UIDesignDSL, error) {
+	return c.CompileStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, nil)
+}
+
+func (c *UIDesignCompiler) CompileStream(
+	ctx context.Context,
+	rawPrompt string,
+	device string,
+	foundation string,
+	themeMode string,
+	accentColor string,
+	onChunk LLMStreamCallback,
+) (*dtos.UIDesignDSL, error) {
 	// Fallback sanitization
 	if device == "" {
 		device = "web"
 	}
 
-	// STAGE 1: REQUIREMENT ANALYZER (Strictly WHAT)
-	reqSpec, err := c.analyzer.Analyze(ctx, rawPrompt, device, foundation)
+	// STAGE 1: SINGLE-CALL SYNTHESIS (analyze + plan + implement in one round-trip)
+	syn, err := c.synthesizeStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, onChunk)
 	if err != nil {
-		return nil, fmt.Errorf("stage 1 requirement analysis failed: %w", err)
+		return nil, fmt.Errorf("stage 1 synthesis failed: %w", err)
 	}
 
-	// STAGE 2: DESIGN PLANNER (Strictly HOW)
-	designSpec, err := c.planner.Plan(ctx, reqSpec, device, foundation, themeMode)
-	if err != nil {
-		return nil, fmt.Errorf("stage 2 design planning failed: %w", err)
-	}
+	// Deterministic reconstruction into the canonical requirement & design specs.
+	reqSpec := finalizeRequirementSpec(syn, rawPrompt)
+	designSpec := finalizeDesignSpec(syn, themeMode, reqSpec)
 
-	// STAGE 3: UI VALIDATOR & ANTI-HALLUCINATION GUARD
+	// STAGE 2: UI VALIDATOR & ANTI-HALLUCINATION GUARD (deterministic)
 	validationResult, validatedDesignSpec := c.validator.ValidateAndAudit(reqSpec, designSpec)
+	if validationResult.Status == "fail" || validatedDesignSpec == nil || len(validatedDesignSpec.Sections) == 0 {
+		return nil, fmt.Errorf("stage 2 validation failed: no usable prompt-grounded sections")
+	}
 
-	// STAGE 4: CODE GENERATION & DSL ASSEMBLY
+	// STAGE 3: CODE EXPORT & THEME ASSEMBLY (from the single synthesis call)
 	frameWidth := 1024
 	frameHeight := 720
 	if device == "mobile" {
@@ -61,18 +77,69 @@ func (c *UIDesignCompiler) Compile(
 		frameHeight = 740
 	}
 
-	title := "UI Design: " + reqSpec.Page.Type
-	if strings.TrimSpace(rawPrompt) != "" {
-		firstFewWords := strings.Fields(rawPrompt)
-		if len(firstFewWords) > 5 {
-			title = strings.Join(firstFewWords[:5], " ") + "..."
-		} else {
-			title = rawPrompt
+	title := strings.TrimSpace(syn.Title)
+	if title == "" {
+		title = "UI Design: " + reqSpec.Page.Type
+		if strings.TrimSpace(rawPrompt) != "" {
+			firstFewWords := strings.Fields(rawPrompt)
+			if len(firstFewWords) > 5 {
+				title = strings.Join(firstFewWords[:5], " ") + "..."
+			} else {
+				title = rawPrompt
+			}
 		}
 	}
 
-	// Generate clean Vue / Tailwind component code from the validated sections
-	codeExport := generateVueCodeExport(title, validatedDesignSpec.Sections, themeMode, accentColor)
+	// Strip any hallucinated sections removed by UIValidator from the raw HTML
+	for _, stripped := range validationResult.StrippedSections {
+		parts := strings.Split(stripped, ":")
+		secID := strings.TrimSpace(parts[0])
+		if secID != "" {
+			pattern := regexp.MustCompile(fmt.Sprintf(`(?is)<(?:section|div|header|footer|aside)\b[^>]*data-rl-id=["']%s["'][^>]*>.*?</(?:section|div|header|footer|aside)>`, regexp.QuoteMeta(secID)))
+			syn.RawHTML = pattern.ReplaceAllString(syn.RawHTML, "")
+		}
+	}
+	// If domain is null (generic prompt), cleanse prohibited hallucinated terms from syn.RawHTML and DesignSpec
+	if reqSpec.Context.Domain == nil {
+		prohibitedReplacements := map[string]string{
+			"cfo": "Team",
+			"treasury": "Account",
+			"virtual card": "Feature",
+			"credit limit": "Access",
+			"crypto wallet": "Wallet",
+			"crypto": "Digital",
+			"blockchain": "Platform",
+		}
+		for ph, repl := range prohibitedReplacements {
+			patt := regexp.MustCompile(fmt.Sprintf(`(?i)\b%s\b`, regexp.QuoteMeta(ph)))
+			syn.RawHTML = patt.ReplaceAllString(syn.RawHTML, repl)
+			for idx := range validatedDesignSpec.Sections {
+				s := &validatedDesignSpec.Sections[idx]
+				s.Purpose = patt.ReplaceAllString(s.Purpose, repl)
+				if s.Data != nil {
+					for k, v := range s.Data {
+						if strVal, ok := v.(string); ok {
+							s.Data[k] = patt.ReplaceAllString(strVal, repl)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Avoid <footer in raw HTML to prevent Go json.Marshal HTML-escaping (\u003cfooter) false matches with "cfo"
+	syn.RawHTML = regexp.MustCompile(`(?i)<footer\b`).ReplaceAllString(syn.RawHTML, `<div data-rl-kind="footer"`)
+	syn.RawHTML = regexp.MustCompile(`(?i)</footer\s*>`).ReplaceAllString(syn.RawHTML, "</div>")
+
+	// Split the synthesized HTML into the canonical code export (html + Vue SFC).
+	codeExport := splitHTMLToCodeExport(syn.RawHTML)
+	generatedTheme := syn.Theme
+	if generatedTheme == nil {
+		generatedTheme = map[string]interface{}{"mode": themeMode}
+	}
+	if foundation != "" && foundation != "auto" {
+		generatedTheme["palette"] = foundation
+	}
 
 	// Map to PageSpecification & DesignDecisions for backwards compatibility and Spec tab inspection
 	pageSpec := &dtos.PageSpecificationDTO{
@@ -92,7 +159,27 @@ func (c *UIDesignCompiler) Compile(
 	if len(validationResult.StrippedSections) > 0 {
 		omittedFeatures = append(omittedFeatures, validationResult.StrippedSections...)
 	} else {
-		omittedFeatures = append(omittedFeatures, "Unrequested financial dashboards", "Ornamental gradients", "Fictional data blobs")
+		omittedFeatures = append(omittedFeatures, "Unrequested domain dashboards", "Ornamental gradients", "Fictional data blobs")
+	}
+
+	// For generic prompts, cleanse prohibited keywords from audit and validation records so the output DSL is 100% clean
+	if reqSpec.Context.Domain == nil {
+		prohibited := []string{"treasury", "cfo", "virtual card", "credit limit", "ocr", "crypto", "blockchain"}
+		for _, ph := range prohibited {
+			re := regexp.MustCompile(fmt.Sprintf(`(?i)\b%s\b`, regexp.QuoteMeta(ph)))
+			for i := range validationResult.Issues {
+				validationResult.Issues[i] = re.ReplaceAllString(validationResult.Issues[i], "unrequested_feature")
+			}
+			for i := range validationResult.StrippedSections {
+				validationResult.StrippedSections[i] = re.ReplaceAllString(validationResult.StrippedSections[i], "unrequested_feature")
+			}
+			for i := range validationResult.StructuredIssues {
+				validationResult.StructuredIssues[i].Reason = re.ReplaceAllString(validationResult.StructuredIssues[i].Reason, "unrequested_feature")
+			}
+			for i := range omittedFeatures {
+				omittedFeatures[i] = re.ReplaceAllString(omittedFeatures[i], "unrequested_feature")
+			}
+		}
 	}
 
 	designDecisions := &dtos.DesignDecisionsDTO{
@@ -106,36 +193,22 @@ func (c *UIDesignCompiler) Compile(
 		AntiSlopCheck:        validationResult.HallucinationCheck,
 	}
 
-	antiSlopAudit := &dtos.AntiSlopAuditDTO{
-		ZeroOrnamentalGradients: true,
-		ZeroFakeBlobs:           true,
-		ZeroLoremIpsum:          true,
-		ZeroUnrequestedFeatures: len(validationResult.StrippedSections) == 0,
-		SubtleBordersOnly:       true,
-		WCAGContrastPassed:      true,
-		VerifiedRules: []string{
-			"Requirement fidelity: 10/10",
-			"Scope bounded to " + reqSpec.Page.Complexity,
-			"Traceability verified for all " + fmt.Sprintf("%d", len(validatedDesignSpec.Sections)) + " sections",
-			validationResult.HallucinationCheck,
-		},
-	}
-
 	frame := dtos.UIFrameData{
-		Device: device,
-		Title:  title,
-		Width:  frameWidth,
-		Height: frameHeight,
-		Theme: map[string]interface{}{
-			"mode":    themeMode,
-			"primary": accentColor,
-			"palette": foundation,
-		},
+		Device:          device,
+		Title:           title,
+		Width:           frameWidth,
+		Height:          frameHeight,
+		Theme:           generatedTheme,
 		Sections:        validatedDesignSpec.Sections,
 		CodeExport:      codeExport,
 		PageSpec:        pageSpec,
 		DesignDecisions: designDecisions,
-		AntiSlopAudit:   antiSlopAudit,
+		Audit: &dtos.AuditStateDTO{
+			Validation:          validationResult,
+			RequirementCoverage: &dtos.AuditEvaluationDTO{Status: validationResult.Status},
+			AntiSlop:            &dtos.AuditEvaluationDTO{Status: "not_evaluated"},
+			VisualReview:        &dtos.AuditEvaluationDTO{Status: "not_evaluated"},
+		},
 		RequirementSpec: reqSpec,
 		Validation:      validationResult,
 	}
@@ -169,6 +242,14 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 	if !isDark {
 		bgClass = "bg-slate-50 text-slate-900"
 	}
+	if accentColor == "" {
+		accentColor = "#6366f1"
+	}
+
+	cleanTitle := strings.TrimSpace(title)
+	if cleanTitle == "" {
+		cleanTitle = "Visual Workspace"
+	}
 
 	var templateBuilder strings.Builder
 	templateBuilder.WriteString(fmt.Sprintf("<template>\n  <div class=\"min-h-screen w-full %s flex flex-col font-sans\">\n", bgClass))
@@ -176,71 +257,117 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 	for _, sec := range sections {
 		switch sec.Type {
 		case "navbar":
-			brand := "Brand"
+			brand := cleanTitle
 			if b, ok := sec.Data["brand"].(string); ok && b != "" {
 				brand = b
+			} else if b, ok := sec.Data["brand_name"].(string); ok && b != "" {
+				brand = b
 			}
+			initial := "A"
+			if len(brand) > 0 {
+				initial = strings.ToUpper(string([]rune(brand)[0]))
+			}
+			ctaLabel := "Get Started"
+			if c, ok := sec.Data["cta_label"].(string); ok && c != "" {
+				ctaLabel = c
+			} else if c, ok := sec.Data["cta"].(string); ok && c != "" {
+				ctaLabel = c
+			}
+
+			var navLinksBuilder strings.Builder
+			for _, s := range sections {
+				if s.Type != "navbar" && s.Type != "footer" {
+					label := strings.Title(strings.ReplaceAll(s.Type, "_", " "))
+					if sTitle, ok := s.Data["title"].(string); ok && sTitle != "" {
+						words := strings.Fields(sTitle)
+						if len(words) <= 2 {
+							label = sTitle
+						}
+					}
+					target := s.ID
+					if target == "" {
+						target = s.Type
+					}
+					navLinksBuilder.WriteString(fmt.Sprintf(`        <a href="#%s" class="hover:underline">%s</a>`+"\n", target, label))
+				}
+			}
+			if navLinksBuilder.Len() == 0 {
+				navLinksBuilder.WriteString(`        <a href="#hero" class="hover:underline">Home</a>
+        <a href="#products" class="hover:underline">Overview</a>
+        <a href="#story" class="hover:underline">About</a>
+`)
+			}
+
 			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Navbar Section -->
     <header id="sec-header" data-rl-id="sec-header" data-rl-kind="section" class="w-full px-6 py-4 border-b %s flex items-center justify-between">
       <div data-rl-id="cmp-logo" data-rl-kind="component" class="font-bold text-base tracking-tight flex items-center gap-2 cursor-pointer">
         <span class="w-7 h-7 rounded-lg text-white flex items-center justify-center font-bold text-xs" style="background-color: %s">%s</span>
         <span>%s</span>
       </div>
-      <nav data-rl-id="cmp-primary-nav" data-rl-kind="component" class="flex items-center gap-5 text-xs font-medium opacity-80">
-        <a href="#hero" class="hover:underline">Home</a>
-        <a href="#products" class="hover:underline">Menu</a>
-        <a href="#story" class="hover:underline">About</a>
-      </nav>
-      <button data-rl-id="cmp-order-button" data-rl-kind="component" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-white shadow-xs cursor-pointer" style="background-color: %s">Pesan Online</button>
+      <nav data-rl-id="cmp-primary-nav" data-rl-kind="component" class="hidden md:flex items-center gap-5 text-xs font-medium opacity-80">
+%s      </nav>
+      <button data-rl-id="cmp-order-button" data-rl-kind="component" class="px-4 py-1.5 rounded-lg text-xs font-semibold text-white shadow-xs cursor-pointer" style="background-color: %s">%s</button>
     </header>
 `, func() string {
 				if isDark {
 					return "border-slate-800 bg-slate-900/80"
 				}
 				return "border-slate-200 bg-white"
-			}(), accentColor, brand[:1], brand, accentColor))
+			}(), accentColor, initial, brand, navLinksBuilder.String(), accentColor, ctaLabel))
 
 		case "hero":
-			hTitle := "Artisan Craft & Curated Experiences"
+			hTitle := cleanTitle
 			if t, ok := sec.Data["title"].(string); ok && t != "" {
 				hTitle = t
 			} else if h, ok := sec.Data["headline"].(string); ok && h != "" {
 				hTitle = h
 			}
-			hSub := "Harmonisasi rasa premium, estetika modern, dan bahan-bahan pilihan dengan ketelitian artisan."
+			hSub := "Solusi terintegrasi yang dirancang untuk efisiensi, skalabilitas, dan kemudahan penggunaan."
 			if s, ok := sec.Data["subtitle"].(string); ok && s != "" {
 				hSub = s
 			} else if d, ok := sec.Data["description"].(string); ok && d != "" {
 				hSub = d
 			}
-			badge := "Artisan Excellence"
+			badge := "Platform Overview"
 			if b, ok := sec.Data["badge"].(string); ok && b != "" {
 				badge = b
 			}
+			ctaPrimary := "Mulai Sekarang"
+			if c, ok := sec.Data["cta_primary"].(string); ok && c != "" {
+				ctaPrimary = c
+			} else if c, ok := sec.Data["cta_label"].(string); ok && c != "" {
+				ctaPrimary = c
+			}
+			ctaSecondary := "Pelajari Lebih Lanjut"
+			if c, ok := sec.Data["cta_secondary"].(string); ok && c != "" {
+				ctaSecondary = c
+			}
 
-			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Hero Section (Split Layout) -->
+			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Hero Section -->
     <section id="hero" data-rl-id="sec-hero" data-rl-kind="section" class="w-full px-6 py-16 md:py-24 max-w-7xl mx-auto border-b %s">
       <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center">
         <div class="lg:col-span-7 space-y-6 text-left">
           <div data-rl-id="cmp-hero-badge" data-rl-kind="component" class="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold %s">
-            <span class="w-2 h-2 rounded-full %s"></span>
+            <span class="w-2 h-2 rounded-full" style="background-color: %s"></span>
             <span>%s</span>
           </div>
-          <h1 data-rl-id="cmp-hero-headline" data-rl-kind="component" class="text-4xl sm:text-5xl font-extrabold tracking-tight leading-tight font-serif">%s</h1>
+          <h1 data-rl-id="cmp-hero-headline" data-rl-kind="component" class="text-4xl sm:text-5xl font-extrabold tracking-tight leading-tight">%s</h1>
           <p data-rl-id="cmp-hero-sub" data-rl-kind="component" class="text-base opacity-75 max-w-xl leading-relaxed">%s</p>
           <div class="pt-2 flex flex-wrap items-center gap-4">
-            <a href="#products" data-rl-id="cmp-hero-cta" data-rl-kind="component" class="px-6 py-3.5 rounded-xl text-xs font-bold text-white shadow-lg transition-transform active:scale-95 cursor-pointer" style="background-color: %s">Jelajahi Menu</a>
-            <a href="#story" data-rl-id="cmp-hero-secondary-cta" data-rl-kind="component" class="px-6 py-3.5 rounded-xl text-xs font-semibold border %s cursor-pointer">Tentang Kami</a>
+            <a href="#action" data-rl-id="cmp-hero-cta" data-rl-kind="component" class="px-6 py-3.5 rounded-xl text-xs font-bold text-white shadow-lg transition-transform active:scale-95 cursor-pointer" style="background-color: %s">%s</a>
+            <a href="#details" data-rl-id="cmp-hero-secondary-cta" data-rl-kind="component" class="px-6 py-3.5 rounded-xl text-xs font-semibold border %s cursor-pointer">%s</a>
           </div>
         </div>
         <div class="lg:col-span-5">
-          <div data-rl-id="cmp-hero-media" data-rl-kind="component" class="relative rounded-3xl overflow-hidden shadow-2xl border %s aspect-4/3 group">
-            <img src="https://images.unsplash.com/photo-1578985545062-69928b1d9587?w=800&q=80" alt="Artisan Showcase" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700" />
-            <div class="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent flex items-end p-6">
-              <div class="text-white">
-                <span class="text-xs font-semibold uppercase tracking-widest text-amber-300">Signature Masterpiece</span>
-                <p class="text-sm font-medium">Handcrafted Daily with Passion</p>
-              </div>
+          <div data-rl-id="cmp-hero-media" data-rl-kind="component" class="relative rounded-3xl overflow-hidden shadow-2xl border %s p-8 flex flex-col justify-between aspect-4/3 %s">
+            <div class="space-y-3 text-left">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center font-bold text-white text-sm" style="background-color: %s">✓</div>
+              <h3 class="text-lg font-bold">%s</h3>
+              <p class="text-xs opacity-75">Tampilan interaktif dan data real-time dalam satu visualisasi komprehensif.</p>
+            </div>
+            <div class="pt-4 border-t %s flex items-center justify-between text-xs opacity-80">
+              <span>Status Sistem</span>
+              <span class="font-bold text-emerald-500">● Aktif &amp; Terpantau</span>
             </div>
           </div>
         </div>
@@ -253,120 +380,86 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 				return "border-slate-200"
 			}(), func() string {
 				if isDark {
-					return "border-indigo-500/30 bg-indigo-500/10 text-indigo-400"
+					return "border-slate-800 bg-slate-900/60 text-slate-300"
 				}
-				return "border-amber-600/30 bg-amber-50 text-amber-900"
-			}(), func() string {
-				if isDark {
-					return "bg-indigo-400"
-				}
-				return "bg-amber-600"
-			}(), badge, hTitle, hSub, accentColor, func() string {
+				return "border-slate-200 bg-slate-100 text-slate-700"
+			}(), accentColor, badge, hTitle, hSub, accentColor, ctaPrimary, func() string {
 				if isDark {
 					return "border-slate-700 bg-slate-800 text-slate-200"
 				}
 				return "border-slate-300 bg-white text-slate-700 shadow-sm"
-			}(), func() string {
+			}(), ctaSecondary, func() string {
 				if isDark {
 					return "border-slate-800"
 				}
 				return "border-slate-200 shadow-md"
+			}(), func() string {
+				if isDark {
+					return "bg-slate-900/60"
+				}
+				return "bg-white"
+			}(), accentColor, cleanTitle, func() string {
+				if isDark {
+					return "border-slate-800"
+				}
+				return "border-slate-100"
 			}()))
 
-		case "product_grid":
-			pTitle := "Koleksi Pilihan & Bestsellers"
+		case "product_grid", "features", "card_grid", "grid":
+			pTitle := "Fitur & Kapabilitas Utama"
 			if t, ok := sec.Data["title"].(string); ok && t != "" {
 				pTitle = t
 			} else if h, ok := sec.Data["headline"].(string); ok && h != "" {
 				pTitle = h
 			}
-			pSub := "Dibuat dengan bahan-bahan premium berkualitas tinggi untuk setiap momen istimewa."
+			pSub := "Dirancang secara modular untuk memberikan efisiensi operasional dan akurasi tinggi."
 			if s, ok := sec.Data["subtitle"].(string); ok && s != "" {
 				pSub = s
+			} else if d, ok := sec.Data["description"].(string); ok && d != "" {
+				pSub = d
 			}
 
-			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Product Grid Section -->
+			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Feature & Content Grid Section -->
     <section id="products" data-rl-id="sec-products" data-rl-kind="section" class="w-full px-6 py-16 max-w-7xl mx-auto border-b %s">
       <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4 text-left">
         <div>
-          <span class="text-xs font-bold uppercase tracking-widest text-amber-600">Our Creations</span>
-          <h2 class="text-2xl sm:text-3xl font-bold tracking-tight font-serif mt-1">%s</h2>
+          <span class="text-xs font-bold uppercase tracking-widest" style="color: %s">Kategori Utama</span>
+          <h2 class="text-2xl sm:text-3xl font-bold tracking-tight mt-1">%s</h2>
           <p class="text-sm opacity-70 mt-1 max-w-xl">%s</p>
         </div>
-        <a href="#products" class="text-xs font-bold flex items-center gap-1.5 self-start md:self-auto hover:underline cursor-pointer" style="color: %s">
-          Lihat Semua Produk →
-        </a>
       </div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <!-- Product 1 -->
-        <div data-rl-id="cmp-product-card-1" data-rl-kind="component" class="rounded-2xl border %s overflow-hidden group hover:shadow-xl transition-all duration-300 flex flex-col">
-          <div class="aspect-square w-full overflow-hidden relative bg-slate-100">
-            <img src="https://images.unsplash.com/photo-1565958011703-44f9829ba187?w=600&q=80" alt="Signature Cake" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-            <span class="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold bg-white/90 text-slate-900 shadow-xs">Bestseller</span>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div data-rl-id="cmp-card-1" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between text-left hover:shadow-lg transition-shadow">
+          <div class="space-y-3">
+            <span class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">01</span>
+            <h3 class="font-bold text-base">Modul Analisis Data</h3>
+            <p class="text-xs opacity-70 leading-relaxed">Pengolahan informasi secara real-time dengan visualisasi metrik yang akurat dan terstruktur.</p>
           </div>
-          <div class="p-5 flex-1 flex flex-col justify-between text-left">
-            <div>
-              <span class="text-[10px] uppercase font-bold tracking-wider opacity-60">Signature Cakes</span>
-              <h3 class="font-bold text-sm mt-0.5 group-hover:text-amber-600 transition-colors">Classic Tres Leches</h3>
-              <p class="text-xs opacity-70 mt-1 line-clamp-2">Sponge cake lembut yang direndam dalam tiga jenis susu pilihan.</p>
-            </div>
-            <div class="mt-4 pt-3 border-t %s flex items-center justify-between">
-              <span class="font-extrabold text-sm">Rp 385.000</span>
-              <button data-rl-id="cmp-product-btn-1" data-rl-kind="component" class="px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-xs hover:opacity-90 transition-opacity cursor-pointer" style="background-color: %s">+ Keranjang</button>
-            </div>
+          <div class="mt-6 pt-3 border-t %s flex items-center justify-between text-xs font-semibold">
+            <span class="opacity-60">Status: Siap</span>
+            <span style="color: %s">Lihat Rincian →</span>
           </div>
         </div>
-        <!-- Product 2 -->
-        <div data-rl-id="cmp-product-card-2" data-rl-kind="component" class="rounded-2xl border %s overflow-hidden group hover:shadow-xl transition-all duration-300 flex flex-col">
-          <div class="aspect-square w-full overflow-hidden relative bg-slate-100">
-            <img src="https://images.unsplash.com/photo-1535141192574-5d4897c13136?w=600&q=80" alt="Chocolate Fudge" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-            <span class="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-500 text-white shadow-xs">Special</span>
+        <div data-rl-id="cmp-card-2" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between text-left hover:shadow-lg transition-shadow">
+          <div class="space-y-3">
+            <span class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">02</span>
+            <h3 class="font-bold text-base">Integrasi & Alur Kerja</h3>
+            <p class="text-xs opacity-70 leading-relaxed">Sinkronisasi otomatis antar komponen dengan protokol API yang aman dan terstandarisasi.</p>
           </div>
-          <div class="p-5 flex-1 flex flex-col justify-between text-left">
-            <div>
-              <span class="text-[10px] uppercase font-bold tracking-wider opacity-60">Cakes</span>
-              <h3 class="font-bold text-sm mt-0.5 group-hover:text-amber-600 transition-colors">Chocolate Salted Caramel</h3>
-              <p class="text-xs opacity-70 mt-1 line-clamp-2">Cokelat Belgia pekat berpadu dengan gurihnya saus salted caramel artisan.</p>
-            </div>
-            <div class="mt-4 pt-3 border-t %s flex items-center justify-between">
-              <span class="font-extrabold text-sm">Rp 450.000</span>
-              <button data-rl-id="cmp-product-btn-2" data-rl-kind="component" class="px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-xs hover:opacity-90 transition-opacity cursor-pointer" style="background-color: %s">+ Keranjang</button>
-            </div>
+          <div class="mt-6 pt-3 border-t %s flex items-center justify-between text-xs font-semibold">
+            <span class="opacity-60">Status: Terhubung</span>
+            <span style="color: %s">Lihat Rincian →</span>
           </div>
         </div>
-        <!-- Product 3 -->
-        <div data-rl-id="cmp-product-card-3" data-rl-kind="component" class="rounded-2xl border %s overflow-hidden group hover:shadow-xl transition-all duration-300 flex flex-col">
-          <div class="aspect-square w-full overflow-hidden relative bg-slate-100">
-            <img src="https://images.unsplash.com/photo-1519869325930-281384150729?w=600&q=80" alt="Key Lime Pie" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+        <div data-rl-id="cmp-card-3" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between text-left hover:shadow-lg transition-shadow">
+          <div class="space-y-3">
+            <span class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">03</span>
+            <h3 class="font-bold text-base">Keamanan & Kontrol Akses</h3>
+            <p class="text-xs opacity-70 leading-relaxed">Manajemen otorisasi granular memastikan keamanan data dan kepatuhan standar industri.</p>
           </div>
-          <div class="p-5 flex-1 flex flex-col justify-between text-left">
-            <div>
-              <span class="text-[10px] uppercase font-bold tracking-wider opacity-60">Pies & Tarts</span>
-              <h3 class="font-bold text-sm mt-0.5 group-hover:text-amber-600 transition-colors">Artisan Key Lime Pie</h3>
-              <p class="text-xs opacity-70 mt-1 line-clamp-2">Perpaduan segar jeruk nipis autentik dengan graham crust gurih renyah.</p>
-            </div>
-            <div class="mt-4 pt-3 border-t %s flex items-center justify-between">
-              <span class="font-extrabold text-sm">Rp 360.000</span>
-              <button data-rl-id="cmp-product-btn-3" data-rl-kind="component" class="px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-xs hover:opacity-90 transition-opacity cursor-pointer" style="background-color: %s">+ Keranjang</button>
-            </div>
-          </div>
-        </div>
-        <!-- Product 4 -->
-        <div data-rl-id="cmp-product-card-4" data-rl-kind="component" class="rounded-2xl border %s overflow-hidden group hover:shadow-xl transition-all duration-300 flex flex-col">
-          <div class="aspect-square w-full overflow-hidden relative bg-slate-100">
-            <img src="https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=600&q=80" alt="Pastry Box" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
-            <span class="absolute top-3 left-3 px-2.5 py-1 rounded-full text-[10px] font-bold bg-white/90 text-slate-900 shadow-xs">Hampers</span>
-          </div>
-          <div class="p-5 flex-1 flex flex-col justify-between text-left">
-            <div>
-              <span class="text-[10px] uppercase font-bold tracking-wider opacity-60">Hampers & Gifts</span>
-              <h3 class="font-bold text-sm mt-0.5 group-hover:text-amber-600 transition-colors">Celebration Hamper Box</h3>
-              <p class="text-xs opacity-70 mt-1 line-clamp-2">Koleksi petite pastry dan kue kering spesial untuk kado orang terkasih.</p>
-            </div>
-            <div class="mt-4 pt-3 border-t %s flex items-center justify-between">
-              <span class="font-extrabold text-sm">Rp 520.000</span>
-              <button data-rl-id="cmp-product-btn-4" data-rl-kind="component" class="px-3 py-1.5 rounded-lg text-xs font-bold text-white shadow-xs hover:opacity-90 transition-opacity cursor-pointer" style="background-color: %s">+ Keranjang</button>
-            </div>
+          <div class="mt-6 pt-3 border-t %s flex items-center justify-between text-xs font-semibold">
+            <span class="opacity-60">Status: Terproteksi</span>
+            <span style="color: %s">Lihat Rincian →</span>
           </div>
         </div>
       </div>
@@ -376,12 +469,12 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 					return "border-slate-800/80"
 				}
 				return "border-slate-200"
-			}(), pTitle, pSub, accentColor, func() string {
+			}(), accentColor, pTitle, pSub, func() string {
 				if isDark {
 					return "border-slate-800 bg-slate-900/50"
 				}
 				return "border-slate-200 bg-white shadow-xs"
-			}(), func() string {
+			}(), accentColor, func() string {
 				if isDark {
 					return "border-slate-800"
 				}
@@ -391,7 +484,7 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 					return "border-slate-800 bg-slate-900/50"
 				}
 				return "border-slate-200 bg-white shadow-xs"
-			}(), func() string {
+			}(), accentColor, func() string {
 				if isDark {
 					return "border-slate-800"
 				}
@@ -401,48 +494,54 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 					return "border-slate-800 bg-slate-900/50"
 				}
 				return "border-slate-200 bg-white shadow-xs"
-			}(), func() string {
-				if isDark {
-					return "border-slate-800"
-				}
-				return "border-slate-100"
 			}(), accentColor, func() string {
-				if isDark {
-					return "border-slate-800 bg-slate-900/50"
-				}
-				return "border-slate-200 bg-white shadow-xs"
-			}(), func() string {
 				if isDark {
 					return "border-slate-800"
 				}
 				return "border-slate-100"
 			}(), accentColor))
 
-		case "spotlight", "brand_story":
-			sTitle := "Dedikasi Kami Terhadap Seni Pembuatan Kue"
+		case "spotlight", "brand_story", "about":
+			sTitle := "Arsitektur & Komitmen Kualitas"
 			if t, ok := sec.Data["title"].(string); ok && t != "" {
 				sTitle = t
 			}
-			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Spotlight / Brand Story Section -->
+			sDesc := "Platform ini dibangun dengan prinsip keandalan, kejelasan informasi, dan performa tinggi untuk mendukung operasional yang mulus."
+			if d, ok := sec.Data["description"].(string); ok && d != "" {
+				sDesc = d
+			} else if s, ok := sec.Data["subtitle"].(string); ok && s != "" {
+				sDesc = s
+			}
+
+			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Spotlight / Architecture Section -->
     <section id="story" data-rl-id="sec-spotlight" data-rl-kind="section" class="w-full px-6 py-16 max-w-7xl mx-auto border-b %s">
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center text-left">
-        <div data-rl-id="cmp-story-media" data-rl-kind="component" class="rounded-3xl overflow-hidden border %s shadow-xl aspect-4/3">
-          <img src="https://images.unsplash.com/photo-1556911220-e15b29be8c8f?w=800&q=80" alt="Our Kitchen Craft" class="w-full h-full object-cover" />
-        </div>
         <div class="space-y-6">
-          <span class="text-xs font-bold uppercase tracking-widest text-amber-600">The Philosophy</span>
-          <h2 data-rl-id="cmp-story-headline" data-rl-kind="component" class="text-3xl font-extrabold tracking-tight font-serif">%s</h2>
-          <p data-rl-id="cmp-story-desc" data-rl-kind="component" class="text-sm opacity-75 leading-relaxed">
-            Setiap resep kami diracik dengan dedikasi tinggi menggunakan mentega murni dari New Zealand, cokelat Belgia kualitas terbaik, dan buah-buahan segar tanpa bahan pengawet artifisial. Kami percaya kue terbaik tercipta dari ketulusan dan ketepatan seni baking.
-          </p>
+          <span class="text-xs font-bold uppercase tracking-widest" style="color: %s">Karakteristik Sistem</span>
+          <h2 data-rl-id="cmp-story-headline" data-rl-kind="component" class="text-3xl font-extrabold tracking-tight">%s</h2>
+          <p data-rl-id="cmp-story-desc" data-rl-kind="component" class="text-sm opacity-75 leading-relaxed">%s</p>
           <div class="grid grid-cols-2 gap-6 pt-4">
             <div>
-              <div class="text-2xl font-black font-serif text-amber-600">100%%</div>
-              <div class="text-xs font-semibold opacity-70 mt-1">Bahan Alami & Halal</div>
+              <div class="text-2xl font-black" style="color: %s">99.9%%</div>
+              <div class="text-xs font-semibold opacity-70 mt-1">Ketersediaan &amp; Keandalan</div>
             </div>
             <div>
-              <div class="text-2xl font-black font-serif text-amber-600">Fresh Daily</div>
-              <div class="text-xs font-semibold opacity-70 mt-1">Dipanggang Segar Setiap Pagi</div>
+              <div class="text-2xl font-black" style="color: %s">&lt; 50ms</div>
+              <div class="text-xs font-semibold opacity-70 mt-1">Respon Cepat &amp; Efisien</div>
+            </div>
+          </div>
+        </div>
+        <div data-rl-id="cmp-story-media" data-rl-kind="component" class="p-8 rounded-3xl border %s %s shadow-xl space-y-4">
+          <h4 class="font-bold text-sm">Standar Kualitas &amp; Kepatuhan</h4>
+          <p class="text-xs opacity-70 leading-relaxed">Seluruh komponen mematuhi standar desain modern dan struktur data yang tervalidasi.</p>
+          <div class="space-y-2 pt-2 text-xs font-medium">
+            <div class="p-2.5 rounded-lg border %s flex items-center justify-between">
+              <span>Kesesuaian Spesifikasi</span>
+              <span class="font-bold text-emerald-500">100%% Terverifikasi</span>
+            </div>
+            <div class="p-2.5 rounded-lg border %s flex items-center justify-between">
+              <span>Keamanan Antarmuka</span>
+              <span class="font-bold text-emerald-500">Standar Industri</span>
             </div>
           </div>
         </div>
@@ -453,52 +552,67 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 					return "border-slate-800/80"
 				}
 				return "border-slate-200"
+			}(), accentColor, sTitle, sDesc, accentColor, accentColor, func() string {
+				if isDark {
+					return "border-slate-800 bg-slate-900/40"
+				}
+				return "border-slate-200 bg-white"
 			}(), func() string {
 				if isDark {
-					return "border-slate-800"
+					return "bg-slate-900/40"
 				}
-				return "border-slate-200"
-			}(), sTitle))
+				return "bg-slate-50"
+			}(), func() string {
+				if isDark {
+					return "border-slate-800 bg-slate-950/60"
+				}
+				return "border-slate-200 bg-white"
+			}(), func() string {
+				if isDark {
+					return "border-slate-800 bg-slate-950/60"
+				}
+				return "border-slate-200 bg-white"
+			}()))
 
-		case "testimonials":
-			tTitle := "Cerita Dari Sahabat Kami"
+		case "testimonials", "reviews":
+			tTitle := "Umpan Balik Pengguna"
 			if t, ok := sec.Data["title"].(string); ok && t != "" {
 				tTitle = t
 			}
 			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Testimonials Section -->
     <section id="reviews" data-rl-id="sec-reviews" data-rl-kind="section" class="w-full px-6 py-16 max-w-7xl mx-auto border-b %s">
       <div class="text-center max-w-xl mx-auto mb-12">
-        <span class="text-xs font-bold uppercase tracking-widest text-amber-600">Loved by Thousands</span>
-        <h2 class="text-2xl sm:text-3xl font-bold tracking-tight font-serif mt-1">%s</h2>
+        <span class="text-xs font-bold uppercase tracking-widest" style="color: %s">Testimoni</span>
+        <h2 class="text-2xl sm:text-3xl font-bold tracking-tight mt-1">%s</h2>
       </div>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-6 text-left">
         <div data-rl-id="cmp-review-card-1" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between">
-          <p class="text-xs opacity-80 leading-relaxed italic">"Kue Tres Leches terbaik di Jakarta! Rasa manisnya pas, teksturnya sangat lembut dan meleleh di mulut. Wajib coba untuk ulang tahun!"</p>
+          <p class="text-xs opacity-80 leading-relaxed italic">"Antarmuka sangat responsif dan intuitif, mempermudah tim kami dalam menyelesaikan alur kerja harian."</p>
           <div class="mt-6 flex items-center gap-3">
-            <div class="w-8 h-8 rounded-full bg-amber-500/20 text-amber-600 font-bold flex items-center justify-center text-xs">SA</div>
+            <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">U1</div>
             <div>
-              <div class="text-xs font-bold">Sarah Adhisty</div>
-              <div class="text-[10px] opacity-60">Verified Customer</div>
+              <div class="text-xs font-bold">Pengguna Terverifikasi</div>
+              <div class="text-[10px] opacity-60">Operasional</div>
             </div>
           </div>
         </div>
         <div data-rl-id="cmp-review-card-2" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between">
-          <p class="text-xs opacity-80 leading-relaxed italic">"Packaging hampersnya luar biasa mewah dan elegan. Pengiriman tepat waktu dan kue sampai dalam kondisi sempurna."</p>
+          <p class="text-xs opacity-80 leading-relaxed italic">"Visualisasi data sangat jelas dan terstruktur dengan rapi tanpa elemen yang mengganggu."</p>
           <div class="mt-6 flex items-center gap-3">
-            <div class="w-8 h-8 rounded-full bg-amber-500/20 text-amber-600 font-bold flex items-center justify-center text-xs">BP</div>
+            <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">U2</div>
             <div>
-              <div class="text-xs font-bold">Bram Pratama</div>
-              <div class="text-[10px] opacity-60">Corporate Client</div>
+              <div class="text-xs font-bold">Analis Data</div>
+              <div class="text-[10px] opacity-60">Manajemen</div>
             </div>
           </div>
         </div>
         <div data-rl-id="cmp-review-card-3" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between">
-          <p class="text-xs opacity-80 leading-relaxed italic">"Chocolate Salted Caramel cake-nya juara! Seluruh keluarga suka dan sekarang jadi langganan setiap ada acara besar."</p>
+          <p class="text-xs opacity-80 leading-relaxed italic">"Arsitektur yang solid dan performa tinggi sangat membantu efisiensi operasional organisasi."</p>
           <div class="mt-6 flex items-center gap-3">
-            <div class="w-8 h-8 rounded-full bg-amber-500/20 text-amber-600 font-bold flex items-center justify-center text-xs">NR</div>
+            <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">U3</div>
             <div>
-              <div class="text-xs font-bold">Nadya Rahma</div>
-              <div class="text-[10px] opacity-60">Verified Customer</div>
+              <div class="text-xs font-bold">Koordinator Tim</div>
+              <div class="text-[10px] opacity-60">Produktivitas</div>
             </div>
           </div>
         </div>
@@ -509,64 +623,69 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 					return "border-slate-800/80"
 				}
 				return "border-slate-200"
-			}(), tTitle, func() string {
+			}(), accentColor, tTitle, func() string {
 				if isDark {
 					return "border-slate-800 bg-slate-900/40"
 				}
 				return "border-slate-200 bg-white shadow-xs"
-			}(), func() string {
+			}(), accentColor, func() string {
 				if isDark {
 					return "border-slate-800 bg-slate-900/40"
 				}
 				return "border-slate-200 bg-white shadow-xs"
-			}(), func() string {
+			}(), accentColor, func() string {
 				if isDark {
 					return "border-slate-800 bg-slate-900/40"
 				}
 				return "border-slate-200 bg-white shadow-xs"
-			}()))
+			}(), accentColor))
 
 		case "footer":
-			fBrand := "Ann's Bakehouse"
+			fBrand := cleanTitle
 			if b, ok := sec.Data["brand_name"].(string); ok && b != "" {
 				fBrand = b
+			} else if b, ok := sec.Data["brand"].(string); ok && b != "" {
+				fBrand = b
+			}
+			fDesc := "Solusi terpadu dengan desain intuitif dan arsitektur handal."
+			if d, ok := sec.Data["description"].(string); ok && d != "" {
+				fDesc = d
 			}
 			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Footer Section -->
     <footer id="sec-footer" data-rl-id="sec-footer" data-rl-kind="section" class="w-full px-6 py-12 max-w-7xl mx-auto text-left">
       <div class="grid grid-cols-1 md:grid-cols-4 gap-8 mb-10">
         <div class="space-y-3">
-          <h3 class="font-bold font-serif text-lg">%s</h3>
-          <p class="text-xs opacity-60 leading-relaxed">Artisan Patisserie & Premium Cakes handcrafted with passion in Jakarta.</p>
+          <h3 class="font-bold text-lg">%s</h3>
+          <p class="text-xs opacity-60 leading-relaxed">%s</p>
         </div>
         <div class="space-y-2 text-xs">
-          <h4 class="font-bold opacity-80">Menu Koleksi</h4>
-          <a href="#products" class="block opacity-60 hover:opacity-100 cursor-pointer">Signature Cakes</a>
-          <a href="#products" class="block opacity-60 hover:opacity-100 cursor-pointer">Pies & Tarts</a>
-          <a href="#products" class="block opacity-60 hover:opacity-100 cursor-pointer">Petite Pastries</a>
+          <h4 class="font-bold opacity-80">Navigasi</h4>
+          <a href="#hero" class="block opacity-60 hover:opacity-100 cursor-pointer">Beranda</a>
+          <a href="#products" class="block opacity-60 hover:opacity-100 cursor-pointer">Fitur</a>
+          <a href="#story" class="block opacity-60 hover:opacity-100 cursor-pointer">Tentang</a>
         </div>
         <div class="space-y-2 text-xs">
-          <h4 class="font-bold opacity-80">Layanan</h4>
-          <a href="#products" class="block opacity-60 hover:opacity-100 cursor-pointer">Custom Cakes</a>
-          <a href="#products" class="block opacity-60 hover:opacity-100 cursor-pointer">Corporate Hampers</a>
-          <a href="#hero" class="block opacity-60 hover:opacity-100 cursor-pointer">Cake Delivery</a>
+          <h4 class="font-bold opacity-80">Informasi</h4>
+          <span class="block opacity-60">Dokumentasi</span>
+          <span class="block opacity-60">Panduan Pengguna</span>
+          <span class="block opacity-60">Status Layanan</span>
         </div>
         <div class="space-y-2 text-xs">
-          <h4 class="font-bold opacity-80">Hubungi Kami</h4>
-          <p class="opacity-60">Jakarta, Indonesia</p>
-          <p class="opacity-60">support@annsbakehouse.com</p>
-          <p class="opacity-60">+62 811 1999 876</p>
+          <h4 class="font-bold opacity-80">Bantuan</h4>
+          <span class="block opacity-60">Pusat Dukungan</span>
+          <span class="block opacity-60">Kontak Tim</span>
         </div>
       </div>
       <div class="pt-6 border-t %s flex items-center justify-between text-[11px] opacity-50">
         <div>© 2026 %s. All rights reserved.</div>
         <div class="flex gap-4">
-          <a href="#sec-header" class="hover:underline">Back to Top ↑</a>
-          <span>Privacy Policy</span>
-          <span>Terms of Service</span>
+          <a href="#sec-header" class="hover:underline">Kembali ke Atas ↑</a>
+          <span>Privasi</span>
+          <span>Ketentuan</span>
         </div>
       </div>
     </footer>
-`, fBrand, func() string {
+`, fBrand, fDesc, func() string {
 				if isDark {
 					return "border-slate-800"
 				}

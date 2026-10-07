@@ -38,7 +38,7 @@ CRITICAL ARCHITECTURE RULES:
 
 3. PAGE-SPECIFIC STRUCTURAL CONSTRAINTS:
    - For LOGIN / AUTH PAGE:
-     * Layout: "centered_auth" or "single_column".
+     * Layout: derive from the requested visual direction; centered, split editorial, full-bleed or other compositions are allowed.
      * Section type: "form" (or "auth_card").
      * Section data fields: ONLY email/username and password fields, plus primary submit button.
      * "social_buttons": [] (EMPTY array unless explicitly requested in requirements.explicit!).
@@ -47,17 +47,16 @@ CRITICAL ARCHITECTURE RULES:
      * "switch_action": "" (empty unless registration was explicitly requested).
      * "subtitle": Neutral copy ("Masuk ke akun Anda" or "Silakan masukkan kredensial Anda"). NEVER assume product domain.
    - For HOMEPAGE / LANDING:
-     * Standard composition: "navbar" + "hero" (split with visual anchor) + "product_grid" (or "feature_grid") + "spotlight" (or brand story) + "testimonials" + "footer".
-     * Compose 4 to 8 rich sections to create a complete, balanced user journey. NEVER output only 1 or 2 bare sections!
+     * Derive composition and section count from the requested purpose and content. No mandatory hero/grid/testimonial sequence.
+     * Do not invent reviews, metrics, products or claims. A focused single-screen design is valid when requested.
 
 4. DESIGN FREEDOM ADHERENCE:
    - High visual freedom allows expressive typography, sophisticated color contrast, and rich media cards.
    - High composition freedom allows editorial pacing, split heroes, and rich product showcases.
 
 5. COMPLEXITY DISCIPLINE:
-   - "simple": 3 to 4 sections with clean, calm spacing.
-   - "moderate": 4 to 7 sections with balanced storytelling and interactive cards.
-   - "complex": 6 to 10 sections for multi-feature or enterprise layouts.
+   - Complexity governs functional scope, not a fixed section quota.
+   - Minimal styling must preserve requested content, tasks and sections.
 
 6. REQUIREMENT TRACEABILITY:
    Every section MUST have a valid "requirement_source" linking directly to a requirement or composition need:
@@ -65,7 +64,7 @@ CRITICAL ARCHITECTURE RULES:
    If a section has no source, DO NOT INCLUDE IT.
 
 7. COMPONENT REGISTRY:
-   Valid section types:
+   Suggested semantic section types (custom semantic types are allowed):
    - "navbar": header navigation with brand, links, and action button.
    - "hero": headline, subtitle, primary/secondary action buttons with visual media.
    - "feature_grid": 2-4 value propositions with icons and descriptions.
@@ -86,13 +85,13 @@ OUTPUT JSON SCHEMA:
     "complexity": "simple | moderate | complex"
   },
   "layout": {
-    "type": "single_column | dashboard_split | master_detail | centered_auth",
+    "type": "prompt-specific composition description",
     "container": "max-w-6xl | max-w-4xl | max-w-md | w-full",
     "alignment": "left | center",
     "spacing": "4-64px calibrated"
   },
   "visual": {
-    "style": "clean | enterprise | soft_minimal",
+    "style": "prompt-specific visual direction",
     "density": "compact | balanced | generous",
     "theme": "string"
   },
@@ -156,6 +155,14 @@ Plan the design specification strictly following the rules. Every section must h
 		return nil, fmt.Errorf("failed to parse design specification JSON: %w: %s", err, cleanJSON)
 	}
 
+	return populateDesignDetails(&designSpec, themeMode), nil
+}
+
+// populateDesignDetails applies deterministic post-LLM design guards that do not
+// need another LLM call: stable section IDs, traceability objects, synthesized
+// canonical components per section type, and structured design decisions.
+// Shared by the live planning stage and the single-call synthesis path.
+func populateDesignDetails(designSpec *dtos.DesignSpecificationDTO, themeMode string) *dtos.DesignSpecificationDTO {
 	// Populate Canonical Stable Component IDs and Traceability
 	for sIdx := range designSpec.Sections {
 		sec := &designSpec.Sections[sIdx]
@@ -229,23 +236,23 @@ Plan the design specification strictly following the rules. Every section must h
 				brand, _ := sec.Data["brand"].(string)
 				sec.Components = append(sec.Components,
 					dtos.UIComponentDTO{
-						ID:      "cmp-brand-logo",
-						Type:    "brand",
-						Label:   brand,
-						Purpose: "Display brand identity and application name",
+						ID:                "cmp-brand-logo",
+						Type:              "brand",
+						Label:             brand,
+						Purpose:           "Display brand identity and application name",
 						RequirementSource: &dtos.RequirementSourceDTO{Type: "design", ID: "branding"},
 					},
 					dtos.UIComponentDTO{
-						ID:      "cmp-nav-links",
-						Type:    "navigation",
-						Purpose: "Provide primary section navigation",
+						ID:                "cmp-nav-links",
+						Type:              "navigation",
+						Purpose:           "Provide primary section navigation",
 						RequirementSource: &dtos.RequirementSourceDTO{Type: "design", ID: "navigation"},
 					},
 					dtos.UIComponentDTO{
-						ID:      "cmp-nav-cta",
-						Type:    "button",
-						Label:   "Get Started",
-						Purpose: "Top-level call to action",
+						ID:                "cmp-nav-cta",
+						Type:              "button",
+						Label:             "Get Started",
+						Purpose:           "Top-level call to action",
 						RequirementSource: &dtos.RequirementSourceDTO{Type: "design", ID: "cta"},
 					},
 				)
@@ -255,33 +262,33 @@ Plan the design specification strictly following the rules. Every section must h
 				sub, _ := sec.Data["subtitle"].(string)
 				sec.Components = append(sec.Components,
 					dtos.UIComponentDTO{
-						ID:      "cmp-hero-title",
-						Type:    "heading",
-						Label:   title,
-						Purpose: "Communicate core value proposition",
+						ID:                "cmp-hero-title",
+						Type:              "heading",
+						Label:             title,
+						Purpose:           "Communicate core value proposition",
 						RequirementSource: &dtos.RequirementSourceDTO{Type: "explicit", ID: "req-title"},
 					},
 					dtos.UIComponentDTO{
-						ID:      "cmp-hero-subtitle",
-						Type:    "text",
-						Label:   sub,
-						Purpose: "Elaborate headline with supportive copy",
+						ID:                "cmp-hero-subtitle",
+						Type:              "text",
+						Label:             sub,
+						Purpose:           "Elaborate headline with supportive copy",
 						RequirementSource: &dtos.RequirementSourceDTO{Type: "explicit", ID: "req-subtitle"},
 					},
 					dtos.UIComponentDTO{
-						ID:      "cmp-hero-cta-primary",
-						Type:    "button",
-						Label:   "Mulai Sekarang",
-						Purpose: "Primary page action target",
+						ID:                "cmp-hero-cta-primary",
+						Type:              "button",
+						Label:             "Mulai Sekarang",
+						Purpose:           "Primary page action target",
 						RequirementSource: &dtos.RequirementSourceDTO{Type: "design", ID: "primary_cta"},
 					},
 				)
 
 			default:
 				sec.Components = append(sec.Components, dtos.UIComponentDTO{
-					ID:      fmt.Sprintf("cmp-%s-main", sec.Type),
-					Type:    sec.Type,
-					Purpose: fmt.Sprintf("Render %s section content", sec.Type),
+					ID:                fmt.Sprintf("cmp-%s-main", sec.Type),
+					Type:              sec.Type,
+					Purpose:           fmt.Sprintf("Render %s section content", sec.Type),
 					RequirementSource: &dtos.RequirementSourceDTO{Type: "design", ID: "section_content"},
 				})
 			}
@@ -310,5 +317,5 @@ Plan the design specification strictly following the rules. Every section must h
 		},
 	}
 
-	return &designSpec, nil
+	return designSpec
 }
