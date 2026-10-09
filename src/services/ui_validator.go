@@ -60,13 +60,16 @@ func (v *UIValidator) ValidateAndAudit(
 	isDomainSpecified := reqSpec != nil && reqSpec.Context.Domain != nil && strings.TrimSpace(*reqSpec.Context.Domain) != ""
 	isSimpleComplexity := reqSpec != nil && strings.ToLower(reqSpec.Page.Complexity) == "simple"
 
-	// Helper to check if keyword is in explicit requirements or raw prompt
+	// Helper to check if keyword is in explicit requirements or raw prompt or primary goal
 	isExplicitlyRequested := func(keyword string) bool {
 		if reqSpec == nil {
 			return false
 		}
 		kwLower := strings.ToLower(keyword)
 		if strings.Contains(strings.ToLower(reqSpec.RawPrompt), kwLower) {
+			return true
+		}
+		if strings.Contains(strings.ToLower(reqSpec.Goals.Primary), kwLower) {
 			return true
 		}
 		for _, exp := range reqSpec.Requirements.Explicit {
@@ -95,7 +98,20 @@ func (v *UIValidator) ValidateAndAudit(
 		secBytes, _ := json.Marshal(sec)
 		secStr := strings.ToLower(string(secBytes))
 
-		// 1. Hallucination Check: If domain is NOT specified by user, check for unrequested financial/CFO/crypto bloat
+		// 1. Traceability Check: Section must have a requirement source
+		if strings.TrimSpace(sec.RequirementSource) == "" {
+			issues = append(issues, "Section '"+sec.ID+"' has no requirement_source; stripped to prevent requirement drift")
+			strippedSections = append(strippedSections, sec.ID+": missing traceability")
+			structuredIssues = append(structuredIssues, dtos.ValidationIssueDTO{
+				Type:      "traceability_drift",
+				Component: sec.ID,
+				Action:    "remove",
+				Reason:    "missing requirement_source",
+			})
+			continue
+		}
+
+		// 2. Hallucination Check: If domain is NOT specified by user, check for unrequested financial/CFO/crypto bloat
 		hasHallucination := false
 		if !isDomainSpecified {
 			for _, kw := range hallucinatedDomainKeywords {
@@ -118,17 +134,30 @@ func (v *UIValidator) ValidateAndAudit(
 			continue // Strip this entire section!
 		}
 
-		// 2. Traceability Check: Section must have a requirement source
-		if strings.TrimSpace(sec.RequirementSource) == "" {
-			issues = append(issues, "Section '"+sec.ID+"' has no requirement_source; stripped to prevent requirement drift")
-			strippedSections = append(strippedSections, sec.ID+": missing traceability")
-			structuredIssues = append(structuredIssues, dtos.ValidationIssueDTO{
-				Type:      "traceability_drift",
-				Component: sec.ID,
-				Action:    "remove",
-				Reason:    "missing requirement_source",
-			})
-			continue
+		// 3. Unrequested Marketing Section Guard (Anti-Slop R-18, R-28, R-36, R-38):
+		// Testimonials, pricing tables, generic FAQ, or logo clouds must NEVER be added unless explicitly requested in the brief!
+		sTypeLower := strings.ToLower(sec.Type)
+		sIDLower := strings.ToLower(sec.ID)
+		isMarketingSection := sTypeLower == "testimonials" || sTypeLower == "testimonial" || sTypeLower == "reviews" ||
+			sTypeLower == "pricing" || sTypeLower == "pricing_table" || sTypeLower == "faq" || sTypeLower == "logo_cloud" ||
+			strings.Contains(sIDLower, "testimonial") || strings.Contains(sIDLower, "review") ||
+			strings.Contains(sIDLower, "pricing") || strings.Contains(sIDLower, "faq")
+
+		if isMarketingSection {
+			isRequested := isExplicitlyRequested("testimonial") || isExplicitlyRequested("review") ||
+				isExplicitlyRequested("pricing") || isExplicitlyRequested("harga") || isExplicitlyRequested("paket") ||
+				isExplicitlyRequested("faq") || isExplicitlyRequested("tanya") || isExplicitlyRequested("logo")
+			if !isRequested {
+				issues = append(issues, "Detected and stripped unrequested generic marketing section: '"+sec.Type+"' ('"+sec.ID+"') per Anti-Slop R-18/R-28/R-36 rules")
+				strippedSections = append(strippedSections, sec.ID+": unrequested_marketing_section")
+				structuredIssues = append(structuredIssues, dtos.ValidationIssueDTO{
+					Type:      "unrequested_marketing_drift",
+					Component: sec.ID,
+					Action:    "remove",
+					Reason:    "unrequested marketing section (" + sec.Type + ") violates Anti-Slop pure-context rule",
+				})
+				continue // Strip this entire unrequested section!
+			}
 		}
 
 		// 3. Optional Feature Drift Guard & Intra-Section Feature Sanitization

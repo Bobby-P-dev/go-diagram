@@ -19,6 +19,8 @@ var (
 	disallowedEventHandler  = regexp.MustCompile(`(?i)(?:\s+)?\bon[a-zA-Z]{2,30}\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
 	disallowedJavascriptURI = regexp.MustCompile(`(?i)\b(?:href|src|action)\s*=\s*["']\s*javascript:[^"']*["']`)
 	disallowedRawJavascript = regexp.MustCompile(`(?i)javascript\s*:\s*(?:void\s*\(\s*0\s*\)|;)?`)
+	disallowedSlopGradient  = regexp.MustCompile(`(?i)\bfrom-(?:purple|violet)-[56]00\s+(?:via-[a-z]+-[56]00\s+)?to-(?:indigo|purple)-[67]00\b`)
+	disallowedGlowBlob      = regexp.MustCompile(`(?is)<div\b[^>]*class="[^"]*\bblur-[23]xl\b[^"]*\bbg-(?:purple|indigo|violet|pink)-[456]00/[123]0\b[^"]*"[^>]*>\s*</div>`)
 )
 
 // sanitizeStaticHTML cleanses LLM-generated HTML by stripping scripts,
@@ -58,6 +60,10 @@ func sanitizeStaticHTML(htmlStr string) string {
 	// 4. Neutralize javascript: URIs into safe anchor '#'
 	htmlStr = disallowedJavascriptURI.ReplaceAllString(htmlStr, `href="#"`)
 	htmlStr = disallowedRawJavascript.ReplaceAllString(htmlStr, "#")
+
+	// 5. Clean AI Slop visual clichés (generic purple/indigo gradients and blurry glow orbs)
+	htmlStr = disallowedSlopGradient.ReplaceAllString(htmlStr, "from-slate-900 to-slate-950")
+	htmlStr = disallowedGlowBlob.ReplaceAllString(htmlStr, "")
 
 	return strings.TrimSpace(htmlStr)
 }

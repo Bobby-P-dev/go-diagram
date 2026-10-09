@@ -12,6 +12,7 @@ type TargetElementRefDTO struct {
 	Type      string `json:"type"`                 // "component", "section", "page"
 	ID        string `json:"id"`                   // "cmp-order-button", "sec-header"
 	SectionID string `json:"section_id,omitempty"` // "sec-header"
+	FrameID   string `json:"frame_id,omitempty"`   // "ui-frame-1", "ui-frame-2"
 }
 
 type SelectionContextDTO struct {

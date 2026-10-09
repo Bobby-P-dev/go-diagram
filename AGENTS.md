@@ -11,9 +11,9 @@ Use the project agents in `.codex/agents/` when delegation is useful for the use
 | `architect` | System boundaries, architecture, database schema, and API contracts | `backend-development`, `frontend-development` |
 | `backend` | Go services, HTTP routes, PostgreSQL, and snapshots | `backend-development` |
 | `frontend` | Vue components, stores, canvas interactions, and responsive UI | `frontend-development`, `canvas-ui-builder` |
-| `ai-engineer` | LLM integrations, prompts, structured output, and targeted node mutations | `ai-engineering`, `diagram-generation`, `ui-generation` |
+| `ai-engineer` | LLM integrations, prompts, structured output, and targeted node mutations | `ai-engineering`, `diagram-generation`, `ui-generation`, `antislop` |
 | `qa` | Relevant regression checks, API behavior, database consistency, and canvas/export validation | Skills appropriate to the code under test |
-| `ui-reviewer` | Visual quality, accessibility, design foundations, and generated UI review | `ui-review`, `ui-ux-pro-max` |
+| `ui-reviewer` | Visual quality, accessibility, design foundations, and generated UI review | `ui-review`, `ui-ux-pro-max`, `antislop-ui`, `anti-slop-design` |
 
 Read the relevant `SKILL.md` under `../.agents/skills/` before specialized work. All agents inherit the current session's model, reasoning effort, tools, and permissions; roles do not grant access to sibling repositories. Respect available permissions when a task touches another project directory.
 

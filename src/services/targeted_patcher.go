@@ -328,6 +328,7 @@ STRICT EDIT RULES:
 3. DO NOT output markdown code blocks, backticks, or explanation. Output ONLY the raw HTML replacement.
 4. DO NOT alter elements or sections outside this target.
 5. In-page links must use #anchors (e.g. #products, #story). Never use relative links like /products or /.
+6. ANTI-SLOP: Do NOT add generic AI purple/blue gradients or blurry glow orbs. Use concrete, human copy (no buzzwords like "supercharge", "seamless", "elevate"). Maintain pure context without inventing unrequested features.
 `
 
 	userPrompt := fmt.Sprintf(`Target ID: %s

@@ -299,7 +299,9 @@ const (
 	OpInsertSection   OperationType = "INSERT_SECTION"
 	OpDeleteSection   OperationType = "DELETE_SECTION"
 	OpReorderSections OperationType = "REORDER_SECTIONS"
-	OpInsertFrame     OperationType = "INSERT_FRAME"
+	OpInsertFrame      OperationType = "INSERT_FRAME"
+	OpDeviceModeSwitch OperationType = "DEVICE_MODE_SWITCH"
+	OpDeleteFrame      OperationType = "DELETE_FRAME"
 )
 
 type ChangePlanDTO struct {

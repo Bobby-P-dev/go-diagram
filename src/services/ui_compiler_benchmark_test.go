@@ -123,6 +123,86 @@ func TestValidatorAntiHallucinationStripping(t *testing.T) {
 	}
 }
 
+// 1b. UNIT TEST: UI Validator Strips Unrequested Marketing Slop (R-17, R-18, R-28)
+func TestValidatorAntiSlopUnrequestedMarketingStripping(t *testing.T) {
+	validator := NewUIValidator()
+
+	// Context is strictly an internal service management dashboard
+	reqSpec := &dtos.RequirementSpecificationDTO{
+		RawPrompt: "buatkan dashboard internal company service management platform dengan table tiket dan status",
+		Page: dtos.RequirementPageDTO{
+			Type:       "dashboard",
+			Complexity: "medium",
+		},
+		Goals: dtos.RequirementGoalsDTO{
+			Primary: "Monitor internal service ticket statuses",
+		},
+		Requirements: dtos.RequirementsListDTO{
+			Explicit: []string{"Internal company platform", "table tiket dan status"},
+		},
+	}
+
+	// Synthesis generated unrequested AI marketing boilerplate: testimonials, pricing, faq
+	designSpec := &dtos.DesignSpecificationDTO{
+		Page: dtos.DesignPageDTO{
+			Type:       "dashboard",
+			Complexity: "medium",
+		},
+		Sections: []dtos.UISectionDTO{
+			{
+				ID:                "sec-nav",
+				Type:              "navbar",
+				Purpose:           "Navigation bar",
+				RequirementSource: "internal management",
+				Priority:          "high",
+			},
+			{
+				ID:                "sec-table",
+				Type:              "data_table",
+				Purpose:           "Service tickets table",
+				RequirementSource: "table tiket dan status",
+				Priority:          "high",
+			},
+			{
+				ID:                "sec-slop-reviews",
+				Type:              "testimonials",
+				Purpose:           "Customer testimonials",
+				RequirementSource: "ai fluff",
+				Priority:          "low",
+			},
+			{
+				ID:                "sec-slop-pricing",
+				Type:              "pricing",
+				Purpose:           "SaaS pricing tier",
+				RequirementSource: "ai fluff",
+				Priority:          "low",
+			},
+			{
+				ID:                "sec-slop-faq",
+				Type:              "faq",
+				Purpose:           "Frequently asked questions",
+				RequirementSource: "ai fluff",
+				Priority:          "low",
+			},
+		},
+	}
+
+	result, validatedSpec := validator.ValidateAndAudit(reqSpec, designSpec)
+
+	if len(result.StrippedSections) != 3 {
+		t.Fatalf("expected 3 unrequested marketing sections stripped, got %d: %v", len(result.StrippedSections), result.StrippedSections)
+	}
+
+	strippedStr := strings.Join(result.StrippedSections, " ")
+	if !strings.Contains(strippedStr, "sec-slop-reviews") || !strings.Contains(strippedStr, "sec-slop-pricing") || !strings.Contains(strippedStr, "sec-slop-faq") {
+		t.Errorf("expected sec-slop-reviews, sec-slop-pricing, and sec-slop-faq to be in stripped list, got: %v", result.StrippedSections)
+	}
+
+	if len(validatedSpec.Sections) != 2 {
+		t.Errorf("expected 2 validated sections remaining, got %d", len(validatedSpec.Sections))
+	}
+}
+
 // 2. UNIT TEST: UI Validator Enforces Section Traceability (Rule 6)
 func TestValidatorTraceabilityEnforcement(t *testing.T) {
 	validator := NewUIValidator()
@@ -176,9 +256,13 @@ func TestValidatorMinimalPreservesRequestedSections(t *testing.T) {
 	validator := NewUIValidator()
 
 	reqSpec := &dtos.RequirementSpecificationDTO{
+		RawPrompt: "create homepage with navbar, hero, features, faq, testimonials, and newsletter",
 		Page: dtos.RequirementPageDTO{
 			Type:       "homepage",
 			Complexity: "simple", // Minimal styling preserves requested composition
+		},
+		Requirements: dtos.RequirementsListDTO{
+			Explicit: []string{"navbar", "hero", "features", "faq", "testimonials", "newsletter"},
 		},
 	}
 

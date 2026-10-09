@@ -647,17 +647,76 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 	var currentFrame *dtos.UIFrameData
 	var targetNodeIdx = -1
 
-	for idx, n := range currentNodes {
-		if n["type"] == "ui_frame" {
-			if dataMap, ok := n["data"].(map[string]interface{}); ok {
-				dataBytes, _ := json.Marshal(dataMap)
-				var f dtos.UIFrameData
-				if err := json.Unmarshal(dataBytes, &f); err == nil {
-					currentFrame = &f
-					targetNodeIdx = idx
-					break
-				} else {
-					log.Printf("[UI_FRAME UNMARSHAL ERROR] Failed to unmarshal node %d into UIFrameData: %v", idx, err)
+	// 1.1 Match by explicit TargetedNodeIDs from request
+	if len(req.TargetedNodeIDs) > 0 {
+		targetID := req.TargetedNodeIDs[0]
+		for idx, n := range currentNodes {
+			if n["type"] == "ui_frame" && fmt.Sprintf("%v", n["id"]) == targetID {
+				if dataMap, ok := n["data"].(map[string]interface{}); ok {
+					dataBytes, _ := json.Marshal(dataMap)
+					var f dtos.UIFrameData
+					if err := json.Unmarshal(dataBytes, &f); err == nil {
+						currentFrame = &f
+						targetNodeIdx = idx
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// 1.2 Match by Target.FrameID if provided
+	if targetNodeIdx == -1 && targetRef != nil && targetRef.FrameID != "" {
+		for idx, n := range currentNodes {
+			if n["type"] == "ui_frame" && fmt.Sprintf("%v", n["id"]) == targetRef.FrameID {
+				if dataMap, ok := n["data"].(map[string]interface{}); ok {
+					dataBytes, _ := json.Marshal(dataMap)
+					var f dtos.UIFrameData
+					if err := json.Unmarshal(dataBytes, &f); err == nil {
+						currentFrame = &f
+						targetNodeIdx = idx
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// 1.3 If user asks to switch to web (e.g. "ubah dari mobile ke bentuk web"), prioritize targeting a mobile frame
+	lowerPrompt := strings.ToLower(prompt)
+	isSwitchingToWeb := strings.Contains(lowerPrompt, "web") && (strings.Contains(lowerPrompt, "mobile") || strings.Contains(lowerPrompt, "hp"))
+	if targetNodeIdx == -1 && isSwitchingToWeb {
+		for idx, n := range currentNodes {
+			if n["type"] == "ui_frame" {
+				if dataMap, ok := n["data"].(map[string]interface{}); ok {
+					if dev, ok := dataMap["device"].(string); ok && (dev == "mobile" || dev == "smartphone") {
+						dataBytes, _ := json.Marshal(dataMap)
+						var f dtos.UIFrameData
+						if err := json.Unmarshal(dataBytes, &f); err == nil {
+							currentFrame = &f
+							targetNodeIdx = idx
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 1.4 Fallback: Find the first valid ui_frame
+	if targetNodeIdx == -1 {
+		for idx, n := range currentNodes {
+			if n["type"] == "ui_frame" {
+				if dataMap, ok := n["data"].(map[string]interface{}); ok {
+					dataBytes, _ := json.Marshal(dataMap)
+					var f dtos.UIFrameData
+					if err := json.Unmarshal(dataBytes, &f); err == nil {
+						currentFrame = &f
+						targetNodeIdx = idx
+						break
+					} else {
+						log.Printf("[UI_FRAME UNMARSHAL ERROR] Failed to unmarshal node %d into UIFrameData: %v", idx, err)
+					}
 				}
 			}
 		}
@@ -691,6 +750,17 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 	// while preserving every existing frame node untouched.
 	if changePlan.Operation == dtos.OpInsertFrame {
 		return s.appendNewUIFrame(ctx, project, messages, currentNodes, changePlan, prompt)
+	}
+
+	// 3.0.1 DEVICE / VIEWPORT MODE SWITCH: Convert frame between mobile and web/desktop
+	// while preserving every existing frame node untouched!
+	if changePlan.Operation == dtos.OpDeviceModeSwitch || changePlan.Strategy == "device_switch" || changePlan.Target.Type == "device" {
+		return s.switchFrameDevice(ctx, project, messages, currentNodes, targetNodeIdx, currentFrame, changePlan, prompt)
+	}
+
+	// 3.0.2 DELETE FRAME: Remove a screen from the canvas
+	if changePlan.Operation == dtos.OpDeleteFrame || changePlan.Strategy == "delete_frame" {
+		return s.deleteFrame(ctx, project, messages, currentNodes, targetNodeIdx, currentFrame, prompt)
 	}
 
 	var summary string
@@ -755,10 +825,13 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 			themeMode := ""
 			accentColor := ""
 
+			if changePlan.Target.Device != "" {
+				device = changePlan.Target.Device
+			} else if currentFrame != nil && currentFrame.Device != "" {
+				device = currentFrame.Device
+			}
+
 			if currentFrame != nil {
-				if currentFrame.Device != "" {
-					device = currentFrame.Device
-				}
 				if mode, ok := currentFrame.Theme["mode"].(string); ok && mode != "" {
 					themeMode = mode
 				}
@@ -770,25 +843,49 @@ func (s *uiDesignService) IterateUIDesignWithTargetedChat(ctx context.Context, p
 			dsl, compileErr := s.compiler.Compile(ctx, prompt, device, foundation, themeMode, accentColor)
 			if compileErr == nil && len(dsl.Frames) > 0 {
 				dsl.ChangePlan = changePlan
-				xOffset := 60.0
-				for idx, f := range dsl.Frames {
+				if len(currentNodes) > 1 && targetNodeIdx >= 0 && len(dsl.Frames) == 1 {
+					// Replace only the targeted frame, preserve all other frames!
+					f := dsl.Frames[0]
 					f.ChangePlan = changePlan
 					frameBytes, _ := json.Marshal(f)
 					var frameMap map[string]interface{}
 					_ = json.Unmarshal(frameBytes, &frameMap)
-
 					if rHtml, ok := frameMap["raw_html"].(string); ok && rHtml != "" {
 						frameMap["rawHtml"] = rHtml
 					}
-
-					flowNode := map[string]interface{}{
-						"id":       fmt.Sprintf("ui-frame-%d", idx+1),
-						"type":     "ui_frame",
-						"position": map[string]float64{"x": xOffset, "y": 60},
-						"data":     frameMap,
+					for i, n := range currentNodes {
+						if i == targetNodeIdx {
+							updatedNodes = append(updatedNodes, map[string]interface{}{
+								"id":       n["id"],
+								"type":     "ui_frame",
+								"position": n["position"],
+								"data":     frameMap,
+							})
+						} else {
+							updatedNodes = append(updatedNodes, n)
+						}
 					}
-					updatedNodes = append(updatedNodes, flowNode)
-					xOffset += float64(f.Width) + 80.0
+				} else {
+					xOffset := 60.0
+					for idx, f := range dsl.Frames {
+						f.ChangePlan = changePlan
+						frameBytes, _ := json.Marshal(f)
+						var frameMap map[string]interface{}
+						_ = json.Unmarshal(frameBytes, &frameMap)
+
+						if rHtml, ok := frameMap["raw_html"].(string); ok && rHtml != "" {
+							frameMap["rawHtml"] = rHtml
+						}
+
+						flowNode := map[string]interface{}{
+							"id":       fmt.Sprintf("ui-frame-%d", idx+1),
+							"type":     "ui_frame",
+							"position": map[string]float64{"x": xOffset, "y": 60},
+							"data":     frameMap,
+						}
+						updatedNodes = append(updatedNodes, flowNode)
+						xOffset += float64(f.Width) + 80.0
+					}
 				}
 				summary = fmt.Sprintf("✨ **[REBUILD STRUKTURAL]** Desain antarmuka disusun ulang sesuai kebutuhan: %q.", prompt)
 			}
@@ -1105,6 +1202,13 @@ func (s *uiDesignService) appendNewUIFrame(
 		consistencyPrompt.WriteString(fmt.Sprintf("- Tema Visual: Mode %s, Aksen Warna %s. Pertahankan tone warna latar, border, dan font yang identik dengan Screen 1.\n", themeMode, accentColor))
 	}
 
+	consistencyPrompt.WriteString(`- ATURAN KETAT ANTI-SLOP (PURE ONLY CONTEXT & ZERO HALLUCINATION):
+  1. DILARANG KERAS membuat seksi promosi marketing klise (testimoni fiktif, ulasan rating bintang, FAQ template, tabel pricing, logo bar 'Trusted by') KECUALI diminta secara eksplisit.
+  2. Halaman baru harus menjadi bagian fungsional nyata dari domain sistem Screen 1, bukan landing page promosi SaaS.
+  3. DILARANG menggunakan gradien ungu-indigo klise AI (from-purple-600 to-indigo-600), background glow orbs, atau 3 kartu seragam copy-paste.
+  4. DILARANG menggunakan kata-kata AI klise (supercharge, seamless, unlock, revolutionize). Gunakan bahasa manusia konkret.
+`)
+
 	if isAuthPage {
 		effectiveBrand := brandText
 		if effectiveBrand == "" {
@@ -1236,6 +1340,261 @@ func (s *uiDesignService) appendNewUIFrame(
 	_, _ = s.versionModel.CreateVersion(project.ID, versionNum, summary, nodesBytes, edgesBytes, nil)
 
 	msg1, _ := s.messageModel.AppendMessage(project.ID, "user", userPrompt, nil)
+	msg2, _ := s.messageModel.AppendMessage(project.ID, "assistant", summary, nil)
+
+	updatedMessages := append(messages, *msg1, *msg2)
+	var messageDTOs []dtos.ChatMessageDTO
+	for _, m := range updatedMessages {
+		messageDTOs = append(messageDTOs, dtos.ChatMessageDTO{
+			ID:        m.ID,
+			ProjectID: m.ProjectID,
+			Role:      m.Role,
+			Content:   m.Content,
+			CreatedAt: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+
+	return &dtos.ProjectResponse{
+		ID:            project.ID,
+		Title:         project.Title,
+		DiagramType:   project.DiagramType,
+		CurrentNodes:  nodesBytes,
+		CurrentEdges:  edgesBytes,
+		Nodes:         nodesBytes,
+		Edges:         edgesBytes,
+		Messages:      messageDTOs,
+		Version:       versionNum,
+		VersionNumber: versionNum,
+		CreatedAt:     project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:     project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+// deleteFrame removes an existing frame from the project canvas
+func (s *uiDesignService) deleteFrame(
+	ctx context.Context,
+	project *entities.Project,
+	messages []entities.ChatMessage,
+	currentNodes []map[string]interface{},
+	targetNodeIdx int,
+	currentFrame *dtos.UIFrameData,
+	userPrompt string,
+) (*dtos.ProjectResponse, error) {
+	if len(currentNodes) <= 1 {
+		return nil, fmt.Errorf("tidak dapat menghapus screen: proyek harus memiliki minimal satu screen di kanvas")
+	}
+	if targetNodeIdx < 0 || targetNodeIdx >= len(currentNodes) {
+		return nil, fmt.Errorf("target screen yang ingin dihapus tidak ditemukan")
+	}
+
+	deletedTitle := "Screen"
+	if currentFrame != nil && currentFrame.Title != "" {
+		deletedTitle = currentFrame.Title
+	}
+
+	var updatedNodes []map[string]interface{}
+	deletedNodeID := fmt.Sprintf("%v", currentNodes[targetNodeIdx]["id"])
+	for i, n := range currentNodes {
+		if i != targetNodeIdx {
+			updatedNodes = append(updatedNodes, n)
+		}
+	}
+
+	nodesBytes, _ := json.Marshal(updatedNodes)
+	var currentEdges []map[string]interface{}
+	_ = json.Unmarshal(project.CurrentEdges, &currentEdges)
+	var updatedEdges []map[string]interface{}
+	for _, e := range currentEdges {
+		src := fmt.Sprintf("%v", e["source"])
+		tgt := fmt.Sprintf("%v", e["target"])
+		if src != deletedNodeID && tgt != deletedNodeID {
+			updatedEdges = append(updatedEdges, e)
+		}
+	}
+	edgesBytes, _ := json.Marshal(updatedEdges)
+
+	latestVer, _ := s.versionModel.GetLatestVersionNumber(project.ID)
+	if latestVer <= 0 {
+		latestVer = 1
+	}
+	versionNum := latestVer + 1
+	if err := s.projectModel.UpdateGraph(project.ID, nodesBytes, edgesBytes); err != nil {
+		return nil, fmt.Errorf("failed to update graph: %w", err)
+	}
+
+	summary := fmt.Sprintf("🗑️ **[DELETE_FRAME]** Screen '%s' berhasil dihapus dari kanvas.", deletedTitle)
+	_, _ = s.versionModel.CreateVersion(project.ID, versionNum, summary, nodesBytes, edgesBytes, nil)
+
+	msg1, _ := s.messageModel.AppendMessage(project.ID, "user", userPrompt, nil)
+	msg2, _ := s.messageModel.AppendMessage(project.ID, "assistant", summary, nil)
+
+	updatedMessages := append(messages, *msg1, *msg2)
+	var messageDTOs []dtos.ChatMessageDTO
+	for _, m := range updatedMessages {
+		messageDTOs = append(messageDTOs, dtos.ChatMessageDTO{
+			ID:        m.ID,
+			ProjectID: m.ProjectID,
+			Role:      m.Role,
+			Content:   m.Content,
+			CreatedAt: m.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+
+	return &dtos.ProjectResponse{
+		ID:            project.ID,
+		Title:         project.Title,
+		DiagramType:   project.DiagramType,
+		CurrentNodes:  nodesBytes,
+		CurrentEdges:  edgesBytes,
+		Nodes:         nodesBytes,
+		Edges:         edgesBytes,
+		Messages:      messageDTOs,
+		Version:       versionNum,
+		VersionNumber: versionNum,
+		CreatedAt:     project.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:     project.UpdatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	}, nil
+}
+
+// switchFrameDevice converts an existing frame between mobile and web/desktop viewports
+// while preserving EVERY other frame on the canvas untouched.
+func (s *uiDesignService) switchFrameDevice(
+	ctx context.Context,
+	project *entities.Project,
+	messages []entities.ChatMessage,
+	currentNodes []map[string]interface{},
+	targetNodeIdx int,
+	currentFrame *dtos.UIFrameData,
+	plan *dtos.ChangePlanDTO,
+	prompt string,
+) (*dtos.ProjectResponse, error) {
+	if currentFrame == nil || targetNodeIdx < 0 || targetNodeIdx >= len(currentNodes) {
+		return nil, fmt.Errorf("target frame not found for device conversion")
+	}
+
+	targetDev := strings.ToLower(strings.TrimSpace(plan.Target.Device))
+	if targetDev == "" {
+		targetDev = "web"
+	}
+
+	sourceDev := strings.ToLower(strings.TrimSpace(currentFrame.Device))
+	if sourceDev == "" {
+		sourceDev = "mobile"
+	}
+
+	// 1. Update dimensions and device in targetFrame
+	targetFrame := *currentFrame
+	targetFrame.Device = targetDev
+
+	if targetDev == "mobile" {
+		targetFrame.Width = 375
+		targetFrame.Height = 812
+	} else if targetDev == "desktop" {
+		targetFrame.Width = 1440
+		targetFrame.Height = 900
+	} else {
+		// web default
+		targetFrame.Width = 1024
+		targetFrame.Height = 768
+	}
+
+	// 2. Adapt HTML for new viewport while strictly preserving content and brand
+	if s.aiService != nil && targetFrame.RawHtml != "" {
+		sysPrompt := `You are an expert Tailwind CSS frontend engineer specializing in responsive layout adaptation.
+The user wants to adapt the viewport/device of an existing screen markup between mobile and desktop web.
+
+CRITICAL RULES:
+1. STRICT PRESERVATION: Keep EVERY single word, title, text, form input, button, table, metric, card, icon, brand name, and section from the original markup exactly intact. Do not drop, omit, or invent features.
+   If the original screen is a modal, form, settings screen, or dashboard, keep it as THAT EXACT modal/form/settings/dashboard (e.g. centered desktop card/container or wide desktop form). NEVER transform it into a landing page, hero banner, or generic marketing site.
+2. ADAPT THE VIEWPORT LAYOUT:
+   - When converting from mobile to web desktop:
+     * Remove narrow mobile container constraints like "max-w-sm", "max-w-md", "w-[375px]" from outer page containers.
+     * Use spacious modern desktop layout containers: "w-full max-w-4xl mx-auto px-6" or centered clean desktop card container.
+     * Expand mobile single-column vertical stacks to responsive desktop multi-column layouts (e.g. "grid grid-cols-1 md:grid-cols-2 gap-6" or spacious desktop form layout) where appropriate.
+   - When converting from web desktop to mobile:
+     * Constrain layout to single-column mobile view (375px width friendly, "max-w-md mx-auto px-4").
+3. ANTI-SLOP & CLEANLINESS:
+   - Maintain the existing color palette, theme, and styling.
+   - Output ONLY the raw static HTML body fragment.
+   - NO markdown code blocks, no explanations, no javascript <script> tags, no event handlers.
+`
+		userPrompt := fmt.Sprintf("Source Device: %s\nTarget Device: %s\nScreen Title: %s\nUser Request: %s\n\nORIGINAL HTML MARKUP:\n%s\n\nReturn ONLY the adapted HTML markup:",
+			sourceDev, targetDev, targetFrame.Title, prompt, targetFrame.RawHtml)
+
+		newHtml, err := s.aiService.CallLLMText(sysPrompt, nil, userPrompt)
+		if err == nil && len(strings.TrimSpace(newHtml)) > 100 {
+			cleanHtml := sanitizeStaticHTML(strings.TrimSpace(newHtml))
+			targetFrame.RawHtml = cleanHtml
+			if targetFrame.CodeExport == nil {
+				targetFrame.CodeExport = make(map[string]string)
+			}
+			targetFrame.CodeExport["html"] = cleanHtml
+		} else {
+			// Fallback: replace mobile container classes with web container classes
+			if targetDev == "web" || targetDev == "desktop" {
+				fallbackHtml := targetFrame.RawHtml
+				fallbackHtml = strings.ReplaceAll(fallbackHtml, "max-w-sm mx-auto", "w-full max-w-6xl mx-auto")
+				fallbackHtml = strings.ReplaceAll(fallbackHtml, "max-w-md mx-auto", "w-full max-w-6xl mx-auto")
+				fallbackHtml = strings.ReplaceAll(fallbackHtml, "max-w-sm", "w-full max-w-6xl")
+				targetFrame.RawHtml = fallbackHtml
+				if targetFrame.CodeExport != nil {
+					targetFrame.CodeExport["html"] = fallbackHtml
+				}
+			}
+		}
+	}
+
+	targetFrame.ChangePlan = plan
+
+	// 3. Rebuild updatedNodes while preserving ALL other frames!
+	updatedNodes := make([]interface{}, len(currentNodes))
+	for i, n := range currentNodes {
+		if i == targetNodeIdx {
+			frameBytes, _ := json.Marshal(targetFrame)
+			var frameMap map[string]interface{}
+			_ = json.Unmarshal(frameBytes, &frameMap)
+			if rHtml, ok := frameMap["raw_html"].(string); ok && rHtml != "" {
+				frameMap["rawHtml"] = rHtml
+			}
+			updatedNodes[i] = map[string]interface{}{
+				"id":       n["id"],
+				"type":     "ui_frame",
+				"position": n["position"],
+				"data":     frameMap,
+			}
+		} else {
+			updatedNodes[i] = n
+		}
+	}
+
+	// 4. Version + persist
+	latestVer, _ := s.versionModel.GetLatestVersionNumber(project.ID)
+	if latestVer <= 0 {
+		latestVer = 1
+	}
+	versionNum := latestVer + 1
+
+	for _, n := range updatedNodes {
+		if nodeMap, ok := n.(map[string]interface{}); ok {
+			if dataMap, ok := nodeMap["data"].(map[string]interface{}); ok {
+				dataMap["version"] = versionNum
+			}
+		}
+	}
+
+	nodesBytes, _ := json.Marshal(updatedNodes)
+	edgesBytes := project.CurrentEdges
+
+	if err := s.projectModel.UpdateGraph(project.ID, nodesBytes, edgesBytes); err != nil {
+		return nil, fmt.Errorf("failed to update graph: %w", err)
+	}
+
+	summary := fmt.Sprintf("✨ **[VIEWPORT_SWITCH]** Frame '%s' berhasil diubah dari %s ke %s dengan konten dan tata letak responsif yang terjaga.",
+		targetFrame.Title, strings.ToUpper(sourceDev), strings.ToUpper(targetDev))
+
+	_, _ = s.versionModel.CreateVersion(project.ID, versionNum, summary, nodesBytes, edgesBytes, nil)
+
+	msg1, _ := s.messageModel.AppendMessage(project.ID, "user", prompt, nil)
 	msg2, _ := s.messageModel.AppendMessage(project.ID, "assistant", summary, nil)
 
 	updatedMessages := append(messages, *msg1, *msg2)

@@ -153,3 +153,95 @@ func TestChangeAnalyzerExplicitNewScreenScope(t *testing.T) {
 		t.Fatalf("expected page type timeline, got %s", plan.Target.SectionID)
 	}
 }
+
+func TestChangeAnalyzerDeviceModeSwitch(t *testing.T) {
+	analyzer := &ChangeAnalyzer{}
+	cases := []struct {
+		name        string
+		req         string
+		expectedDev string
+	}{
+		{
+			name:        "user-reported-switch-to-web",
+			req:         "buatkan di mode web jangan di mode mobile ubah ke mode web",
+			expectedDev: "web",
+		},
+		{
+			name:        "user-reported-switch-to-web-2",
+			req:         "ubah dari mobile ke bentuk web",
+			expectedDev: "web",
+		},
+		{
+			name:        "ubah-ke-mode-web",
+			req:         "ubah ke mode web",
+			expectedDev: "web",
+		},
+		{
+			name:        "ganti-ke-mode-mobile",
+			req:         "ganti ke mode mobile",
+			expectedDev: "mobile",
+		},
+		{
+			name:        "versi-desktop",
+			req:         "buatkan versi desktop",
+			expectedDev: "desktop",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := analyzer.AnalyzeTargetedChange(context.Background(), tc.req, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if plan.Operation != dtos.OpDeviceModeSwitch {
+				t.Fatalf("expected OpDeviceModeSwitch, got %s", plan.Operation)
+			}
+			if plan.Strategy != "device_switch" {
+				t.Fatalf("expected strategy device_switch, got %s", plan.Strategy)
+			}
+			if plan.Target.Device != tc.expectedDev {
+				t.Fatalf("expected target device %q, got %q", tc.expectedDev, plan.Target.Device)
+			}
+			if !plan.PreserveOutsideTarget {
+				t.Fatalf("expected PreserveOutsideTarget=true")
+			}
+		})
+	}
+}
+
+func TestChangeAnalyzerDeleteFrame(t *testing.T) {
+	analyzer := &ChangeAnalyzer{}
+	cases := []struct {
+		name string
+		req  string
+	}{
+		{
+			name: "hapus-screen-ini",
+			req:  "hapus screen ini",
+		},
+		{
+			name: "hapus-halaman",
+			req:  "tolong hapus halaman ini",
+		},
+		{
+			name: "delete-screen",
+			req:  "delete this screen",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			plan, err := analyzer.AnalyzeTargetedChange(context.Background(), tc.req, nil, nil, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if plan.Operation != dtos.OpDeleteFrame {
+				t.Fatalf("expected OpDeleteFrame, got %s", plan.Operation)
+			}
+			if plan.Strategy != "delete_frame" {
+				t.Fatalf("expected strategy delete_frame, got %s", plan.Strategy)
+			}
+		})
+	}
+}

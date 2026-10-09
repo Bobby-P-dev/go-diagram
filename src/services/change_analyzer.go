@@ -92,11 +92,81 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 	trimmed := strings.TrimSpace(rawRequest)
 	lower := strings.ToLower(trimmed)
 
+	// STRICT LOCALITY RULE -3: DELETE FRAME / SCREEN
+	isDeleteVerb := strings.Contains(lower, "hapus") ||
+		strings.Contains(lower, "delete") ||
+		strings.Contains(lower, "remove") ||
+		strings.Contains(lower, "buang") ||
+		strings.Contains(lower, "hilangkan")
+	isFrameNoun := strings.Contains(lower, "screen") ||
+		strings.Contains(lower, "halaman") ||
+		strings.Contains(lower, "frame") ||
+		strings.Contains(lower, "layar")
+	isSectionNoun := strings.Contains(lower, "section") ||
+		strings.Contains(lower, "seksi") ||
+		strings.Contains(lower, "bagian")
+
+	if isDeleteVerb && isFrameNoun && !isSectionNoun {
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "structural",
+			Operation:      dtos.OpDeleteFrame,
+			Target: dtos.TargetElementDTO{
+				Type:     "frame",
+				Property: "delete_frame",
+			},
+			RequestedChanges:      []string{trimmed},
+			Scope:                 "project",
+			Strategy:              "delete_frame",
+			Preserve:              []string{"all_other_frames"},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
+	// STRICT LOCALITY RULE -2: DEVICE / VIEWPORT MODE SWITCH
+	isWebTarget := strings.Contains(lower, "mode web") || strings.Contains(lower, "versi web") || strings.Contains(lower, "ke mode web") || strings.Contains(lower, "ke web") || strings.Contains(lower, "tampilan web") || strings.Contains(lower, "bentuk web") || strings.Contains(lower, "format web") || strings.Contains(lower, "jadi web") || strings.Contains(lower, "menjadi web") || strings.Contains(lower, "ubah ke web") || strings.Contains(lower, "ubah web") || strings.Contains(lower, "ganti ke web") || strings.Contains(lower, "ganti web")
+	isMobileTarget := strings.Contains(lower, "mode mobile") || strings.Contains(lower, "versi mobile") || strings.Contains(lower, "ke mode mobile") || strings.Contains(lower, "ke mobile") || strings.Contains(lower, "mode hp") || strings.Contains(lower, "tampilan mobile") || strings.Contains(lower, "bentuk mobile") || strings.Contains(lower, "format mobile") || strings.Contains(lower, "jadi mobile") || strings.Contains(lower, "menjadi mobile") || strings.Contains(lower, "ke hp") || strings.Contains(lower, "versi hp") || strings.Contains(lower, "ubah ke mobile") || strings.Contains(lower, "ganti ke mobile")
+	isDesktopTarget := strings.Contains(lower, "mode desktop") || strings.Contains(lower, "versi desktop") || strings.Contains(lower, "ke mode desktop") || strings.Contains(lower, "ke desktop") || strings.Contains(lower, "ubah ke desktop")
+
+	isNegativeMobile := strings.Contains(lower, "jangan di mode mobile") || strings.Contains(lower, "jangan mode mobile") || strings.Contains(lower, "bukan mode mobile") || strings.Contains(lower, "bukan mobile")
+	isNegativeWeb := strings.Contains(lower, "jangan di mode web") || strings.Contains(lower, "jangan mode web") || strings.Contains(lower, "bukan mode web") || strings.Contains(lower, "bukan web")
+
+	if (isWebTarget || isMobileTarget || isDesktopTarget || isNegativeMobile || isNegativeWeb) && !strings.Contains(lower, "warna") && !strings.Contains(lower, "font") {
+		targetDev := "web"
+		if isMobileTarget && !isNegativeMobile {
+			targetDev = "mobile"
+		} else if isDesktopTarget {
+			targetDev = "desktop"
+		} else if isWebTarget || isNegativeMobile {
+			targetDev = "web"
+		}
+		if isNegativeWeb && !isNegativeMobile {
+			targetDev = "mobile"
+		}
+
+		return &dtos.ChangePlanDTO{
+			Request:        trimmed,
+			Classification: "structural",
+			Operation:      dtos.OpDeviceModeSwitch,
+			Target: dtos.TargetElementDTO{
+				Type:     "device",
+				Property: "viewport_device",
+				Device:   targetDev,
+			},
+			RequestedChanges:      []string{trimmed},
+			Scope:                 "page",
+			Strategy:              "device_switch",
+			Preserve:              []string{"all_existing_frames", "brand", "theme", "content", "core_entities"},
+			PreserveOutsideTarget: true,
+			Regenerate:            false,
+		}, nil
+	}
+
 	// STRICT LOCALITY RULE -1: Add a NEW page/frame to the project (distinct from
 	// adding a section inside the current page). Triggers on explicit phrasing OR
-	// when the frontend chat scope is explicitly set to "+ Screen Baru" (target=page / scope=new_screen).
-	isExplicitNewFrameScope := (targetRef != nil && (targetRef.Type == "page" || targetRef.Type == "screen" || targetRef.Type == "frame")) ||
-		(selectionCtx != nil && (selectionCtx.Scope == "new_screen" || selectionCtx.Scope == "screen_new")) ||
+	// when the frontend chat scope is explicitly set to "+ Screen Baru" (scope=new_screen).
+	isExplicitNewFrameScope := (selectionCtx != nil && (selectionCtx.Scope == "new_screen" || selectionCtx.Scope == "screen_new")) ||
 		strings.HasPrefix(lower, "screen baru:") ||
 		strings.HasPrefix(lower, "halaman baru:") ||
 		strings.HasPrefix(lower, "tambah screen") ||
@@ -180,7 +250,7 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 		}
 	}
 
-	isDeleteVerb := strings.Contains(lower, "hapus") ||
+	isDeleteVerb = strings.Contains(lower, "hapus") ||
 		strings.Contains(lower, "delete") ||
 		strings.Contains(lower, "remove") ||
 		strings.Contains(lower, "buang") ||
@@ -564,6 +634,8 @@ func (a *ChangeAnalyzer) AnalyzeTargetedChange(
 			Regenerate: false,
 		}, nil
 	}
+
+
 
 	// Global design system change: Dark mode
 	if strings.Contains(lower, "dark mode") || strings.Contains(lower, "mode gelap") || strings.Contains(lower, "menjadi dark") {
