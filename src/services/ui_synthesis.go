@@ -39,7 +39,7 @@ CORE PRINCIPLES (ANTI-SLOP CRAFT & HIGH AESTHETIC):
 6. Technical Implementation:
    - Implement a complete, responsive HTML fragment using Pure Tailwind CSS utility classes directly on HTML elements.
    - Do NOT output <style> tags or CSS blocks (use Tailwind utilities exclusively for fast, clean rendering).
-   - One outer root element. Body content only — NO <html>/<head>/<body>, NO <script>, NO event handlers (onclick etc.), NO <iframe>.
+   - One outer root element. Body content only — NO <html>/<head>/<body>, NO <script>, NO event handlers (NO onclick, NO onsubmit, NO on* attributes), NO <iframe>, NO javascript: URIs (use href="#" or button type="button").
    - Responsive from 375px through desktop. Ensure input fields have text-base sm:text-sm to prevent mobile auto-zoom. Comfortable touch targets (min 44px height).
 7. Targeting IDs:
    - Every section in the HTML MUST have a unique data-rl-id and data-rl-kind="section" matching the "sections" array.
@@ -81,6 +81,9 @@ Output valid JSON only, no markdown fences, no commentary. The raw_html must con
 // but only requires section-level targeting IDs at synthesis time (component
 // IDs are synthesized deterministically afterward).
 func validateSynthesis(syn *dtos.UIDesignSynthesisDTO, themeMode, accentColor string) error {
+	// First, sanitize static HTML (strips inline event handlers, scripts, document wrappers, javascript: URIs)
+	syn.RawHTML = sanitizeStaticHTML(syn.RawHTML)
+
 	// Clean up any trailing cut-off tag (e.g. `<section data-rl-id="sec` cut off before closing `>`)
 	trimmedHTML := strings.TrimSpace(syn.RawHTML)
 	if lastLt := strings.LastIndex(trimmedHTML, "<"); lastLt != -1 {
@@ -254,6 +257,7 @@ CRITICAL SCOPING & TOKEN BOUNDS:
 		var syn dtos.UIDesignSynthesisDTO
 		validationErr = json.Unmarshal([]byte(c.aiService.SanitizeJSON(raw)), &syn)
 		if validationErr == nil {
+			syn.RawHTML = sanitizeStaticHTML(syn.RawHTML)
 			syn.RawHTML = sanitizeSynthesisHTMLIDs(syn.RawHTML)
 			syn.Sections = dedupeSynthesisSections(syn.Sections)
 			validationErr = validateSynthesis(&syn, themeMode, accentColor)

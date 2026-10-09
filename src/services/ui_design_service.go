@@ -1122,6 +1122,7 @@ func (s *uiDesignService) appendNewUIFrame(
      - Opsi 'Ingat saya di perangkat ini' dan link 'Bantuan Akses IT / Hubungi Admin'.
   6. Catatan Kepatuhan: Sertakan disclaimer keamanan korporat ringkas di bagian bawah card login.
   7. Skema Warna & Estetika: Latar belakang, card, dan warna aksen (%s) harus 100%%%% serasi dengan Screen 1.
+  8. ATURAN STATIC MARKUP: DILARANG KERAS menyertakan event handler JavaScript (seperti onsubmit="return false", onclick, onchange) dan DILARANG menggunakan href="javascript:void(0)". Gunakan tag <form> standar dan href="#" atau <button type="button">.
 `, effectiveBrand, productDomain, effectiveBrand, effectiveBrand, accentColor))
 	} else {
 		if isSidebarLayout && navSnippet != "" && len(navSnippet) < 3000 {

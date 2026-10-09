@@ -346,10 +346,7 @@ Return ONLY the updated HTML snippet:`, targetID, plan.Request, plan.Scope, acce
 	}
 
 	clean := strings.TrimSpace(resp)
-	clean = strings.TrimPrefix(clean, "```html")
-	clean = strings.TrimPrefix(clean, "```")
-	clean = strings.TrimSuffix(clean, "```")
-	clean = strings.TrimSpace(clean)
+	clean = sanitizeStaticHTML(clean)
 
 	explanation := fmt.Sprintf("Elemen `%s` berhasil diperbarui sesuai instruksi: %q.", targetID, plan.Request)
 	return clean, explanation, nil

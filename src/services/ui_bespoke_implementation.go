@@ -27,6 +27,7 @@ var bespokeStylePattern = regexp.MustCompile(`(?is)<style\b[^>]*>(.*?)</style\s*
 var bespokeDisallowedPattern = regexp.MustCompile(`(?i)<\s*(script|iframe|object|embed|html|head|body)\b|\bon[a-z]+\s*=|javascript\s*:`)
 
 func validateBespokeImplementation(out bespokeImplementation, sections []dtos.UISectionDTO, themeMode, accentColor string) error {
+	out.HTML = sanitizeStaticHTML(out.HTML)
 	if len(strings.TrimSpace(out.HTML)) < 150 || !strings.Contains(out.HTML, "</") {
 		return fmt.Errorf("missing complete HTML implementation")
 	}
@@ -98,6 +99,7 @@ func (c *UIDesignCompiler) generateBespokeImplementation(ctx context.Context, re
 		var out bespokeImplementation
 		validationErr = json.Unmarshal([]byte(c.aiService.SanitizeJSON(raw)), &out)
 		if validationErr == nil {
+			out.HTML = sanitizeStaticHTML(out.HTML)
 			validationErr = validateBespokeImplementation(out, spec.Sections, themeMode, accentColor)
 		}
 		if validationErr == nil {
