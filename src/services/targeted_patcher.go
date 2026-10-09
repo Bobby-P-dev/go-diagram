@@ -468,6 +468,20 @@ func (tp *TargetedPatcher) applyInsertSection(
 		return nil, "", fmt.Errorf("failed to generate section markup: %w", genErr)
 	}
 
+	// B5 GUARD: The freshly generated section must pass the same sanitization as
+	// the main compiler pipeline before it is allowed into the page. This strips
+	// any scripts/event handlers the LLM slipped in and rejects a section that is
+	// not a real, targetable <section> (zero fake success).
+	newSectionHtml = sanitizeStaticHTML(newSectionHtml)
+	cleanSection := strings.TrimSpace(newSectionHtml)
+	if !regexp.MustCompile(`(?i)<section\b[^>]*data-rl-id=["'][^"']+["']`).MatchString(cleanSection) {
+		trunc := cleanSection
+		if len(trunc) > 120 {
+			trunc = trunc[:120] + "..."
+		}
+		return nil, "", fmt.Errorf("generated section markup is not a targetable <section>: %s", trunc)
+	}
+
 	var insertIdx = -1
 	if targetID != "" {
 		_, _, endIdx, err := findElementSnippet(rawHtml, targetID)

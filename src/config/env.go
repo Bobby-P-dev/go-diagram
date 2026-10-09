@@ -58,7 +58,10 @@ func LoadEnv() {
 		OpenAIAPIKey:       getEnvAny([]string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY"}, "sk-27534e0917d892bb-z0aum1-3e0637a7"),
 		OpenAIMBaseURL:     getEnvAny([]string{"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL"}, "http://localhost:20128/v1"),
 		OpenAIModel:             getEnvAny([]string{"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL"}, "ag/gemini-3.8-flash"),
-		AIMaxTokens:             getEnvInt("AI_MAX_TOKENS", 28000),
+		// Cap output at 10,000 tokens: a single production-ready screen typically
+		// fits in 3-5k. A large cap invites the model to over-generate, inflating
+		// latency, token cost, and unrequested UI bloat.
+		AIMaxTokens:             getEnvInt("AI_MAX_TOKENS", 10000),
 		RedisURL:                getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		InternalServiceKey:      getEnv("INTERNAL_SERVICE_KEY", "secret-internal-key-project-diagram"),
 		OrchestrationServiceURL: getEnv("ORCHESTRATION_SERVICE_URL", "http://localhost:8000"),

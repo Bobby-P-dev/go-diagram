@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strings"
@@ -425,18 +426,19 @@ func (s *AIService) callOpenAIWithCallback(
 
 		resp, err := s.client.Do(req)
 		if err != nil {
+			// Network/transport error: retryable unless we ran out of attempts.
 			if attempt == maxAttempts {
 				return "", fmt.Errorf("failed to call OpenAI API after %d attempts: %w", maxAttempts, err)
 			}
-			time.Sleep(time.Duration(attempt) * 1500 * time.Millisecond)
+			time.Sleep(retryBackoff(attempt))
 			continue
 		}
 
 		respStatusCode := resp.StatusCode
-		if respStatusCode == 503 || respStatusCode == 529 || respStatusCode == 429 || respStatusCode == 524 {
+		if retryableHTTPStatus(respStatusCode) {
 			resp.Body.Close()
 			if attempt < maxAttempts {
-				time.Sleep(time.Duration(attempt) * 2000 * time.Millisecond)
+				time.Sleep(retryBackoff(attempt))
 				continue
 			}
 		}
@@ -618,7 +620,7 @@ func (s *AIService) callAnthropic(
 			if attempt == maxAttempts {
 				return "", fmt.Errorf("failed to call Anthropic API after %d attempts: %w", maxAttempts, err)
 			}
-			time.Sleep(time.Duration(attempt) * 1500 * time.Millisecond)
+			time.Sleep(retryBackoff(attempt))
 			continue
 		}
 
@@ -629,14 +631,14 @@ func (s *AIService) callAnthropic(
 			if attempt == maxAttempts {
 				return "", fmt.Errorf("failed to read response body: %w", err)
 			}
-			time.Sleep(time.Duration(attempt) * 1500 * time.Millisecond)
+			time.Sleep(retryBackoff(attempt))
 			continue
 		}
 
 		respStatusCode = resp.StatusCode
-		if respStatusCode == 503 || respStatusCode == 529 || strings.Contains(string(respBytes), "No available accounts") {
+		if retryableHTTPStatus(respStatusCode) || (respStatusCode == http.StatusOK && strings.Contains(string(respBytes), "No available accounts")) {
 			if attempt < maxAttempts {
-				time.Sleep(time.Duration(attempt) * 2000 * time.Millisecond)
+				time.Sleep(retryBackoff(attempt))
 				continue
 			}
 		}
@@ -711,6 +713,34 @@ func (s *AIService) CallLLMText(systemPrompt string, historyMessages []entities.
 
 func (s *AIService) SanitizeJSON(raw string) string {
 	return sanitizeJSONResponse(raw)
+}
+
+// retryableHTTPStatus reports whether an upstream status code is worth re-trying.
+// Retry transient/router overloads (429 rate-limit, 503/529/524 proxy issues) but
+// never deterministic client errors (400/401/403/404/422), which will fail again.
+func retryableHTTPStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests, // 429
+		http.StatusServiceUnavailable,   // 503
+		http.StatusGatewayTimeout,       // 504
+		529, // upstream overload (Anthropic/OpenRouter convention)
+		524: // Cloudflare timeout
+		return true
+	default:
+		return false
+	}
+}
+
+// retryBackoff returns an exponential backoff with jitter for a 1-based attempt,
+// capped so a burst of retries cannot stack into unbounded latency.
+// attempt 1 -> ~250-500ms, 2 -> ~500-1000ms, 3 -> ~1-2s.
+func retryBackoff(attempt int) time.Duration {
+	if attempt > 4 {
+		return 4 * time.Second
+	}
+	base := time.Duration(1<<uint(attempt-1)) * 250 * time.Millisecond
+	jitter := time.Duration(rand.Intn(int(base))) // full jitter avoids thundering herd
+	return base + jitter
 }
 
 var (

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -131,6 +132,14 @@ func (c *UIDesignCompiler) CompileStream(
 	syn.RawHTML = regexp.MustCompile(`(?i)<footer\b`).ReplaceAllString(syn.RawHTML, `<div data-rl-kind="footer"`)
 	syn.RawHTML = regexp.MustCompile(`(?i)</footer\s*>`).ReplaceAllString(syn.RawHTML, "</div>")
 
+	// B3 RESOLUTION (single reconcile point): Only keep sections whose data-rl-id
+	// actually exists in the final rendered HTML. This keeps the Spec / 3-Pillar
+	// view and the iframe preview aligned — a section removed by the validator or
+	// never rendered is dropped here instead of lingering as an "orphan" that makes
+	// the design look like it injected an unrequested element. Runs once, at the
+	// end of compilation, so no later stage re-introduces drift.
+	validatedDesignSpec.Sections = reconcileSectionsToHTML(syn.RawHTML, validatedDesignSpec.Sections)
+
 	// Split the synthesized HTML into the canonical code export (html + Vue SFC).
 	codeExport := splitHTMLToCodeExport(syn.RawHTML)
 	generatedTheme := syn.Theme
@@ -234,6 +243,47 @@ func extractComponentTypes(sections []dtos.UISectionDTO) []string {
 		types = append(types, s.Type)
 	}
 	return types
+}
+
+// sectionTargetPattern matches data-rl-id="..." (section/component targeting).
+var sectionTargetPattern = regexp.MustCompile(`(?i)\bdata-rl-id\s*=\s*["']([^"']+)["']`)
+var sectionHTMLIdPattern = regexp.MustCompile(`(?i)<(?:section|header|footer|aside|div)\b[^>]*\bid=["'](sec-[^"']+)["']`)
+
+// reconcileSectionsToHTML returns only the sections whose targeting ID is actually
+// present in the rendered HTML. Any section that was stripped by the validator, or
+// never rendered by the model, is dropped here (with a log line) so the Spec /
+// traceability view cannot show an "orphan" section that makes a design look like
+// it carried an unrequested element. Section <-> data-rl-id is the primary match;
+// semantic id="sec-<type>" is a tolerant fallback so a valid section is not lost
+// if the model used a plain id instead of data-rl-id.
+func reconcileSectionsToHTML(html string, sections []dtos.UISectionDTO) []dtos.UISectionDTO {
+	present := map[string]bool{}
+	for _, m := range sectionTargetPattern.FindAllStringSubmatch(html, -1) {
+		if len(m) > 1 {
+			present[m[1]] = true
+		}
+	}
+	for _, m := range sectionHTMLIdPattern.FindAllStringSubmatch(html, -1) {
+		if len(m) > 1 {
+			present[m[1]] = true
+		}
+	}
+
+	kept := make([]dtos.UISectionDTO, 0, len(sections))
+	for _, sec := range sections {
+		if present[sec.ID] {
+			kept = append(kept, sec)
+			continue
+		}
+		// Tolerant fallback: type-based id, e.g. sec "hero" matches id="sec-hero".
+		secTypeClean := strings.ToLower(strings.ReplaceAll(sec.Type, "_", "-"))
+		if present[fmt.Sprintf("sec-%s", secTypeClean)] {
+			kept = append(kept, sec)
+			continue
+		}
+		log.Printf("[RECONCILE] dropping section %q (%s): not present in rendered HTML", sec.ID, sec.Type)
+	}
+	return kept
 }
 
 func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode string, accentColor string) map[string]string {

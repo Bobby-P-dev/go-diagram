@@ -55,7 +55,7 @@ services:
       - OPEN_AI_API_KEY=${OPEN_AI_API_KEY:-sk-e0a1cf47f9c53ece-y50fyg-b2f36942}
       - OPEN_AI_MODEL=${OPEN_AI_MODEL:-ag/gemini-3.8-flash}
       - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-https://9router.bby-dev.tech/v1}
-      - AI_MAX_TOKENS=${AI_MAX_TOKENS:-16384}
+      - AI_MAX_TOKENS=${AI_MAX_TOKENS:-10000}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:5174}
     depends_on:
       postgres:
