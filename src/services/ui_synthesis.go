@@ -10,99 +10,156 @@ import (
 	"github.com/Bobby-P-dev/go-diagram.git/src/dtos"
 )
 
-// synthesizePrompt merges the three stage prompts (requirement analysis,
-// design planning, bespoke implementation) into ONE directive so a single LLM
-// round-trip yields the complete synthesis. The deterministic guards that used
-// to run between stages still run as local post-processing.
-const synthesizePrompt = `You are a Principal UI/UX Engineer and Visual Designer crafting a bespoke, production-ready interface based strictly on the user brief.
+// Stage 1 Prompt: Context-Driven Art Director & UX Systems Architect.
+// Focuses 100% of reasoning on understanding the prompt's unique domain soul,
+// inventing a bespoke visual language (palette, typography pairing, spatial rhythm),
+// and planning purposeful, creative sections — leaving raw_html empty ("") so Stage 2
+// can dedicate 100% of its token budget to crafting unescaped HTML/Tailwind/CSS.
+const synthesizePrompt = `You are an Avant-Garde Creative Director and Principal UX Architect (Awwwards Site of the Year, Linear, Stripe Press, Apple Design Award, Teenage Engineering, and Pentagram caliber).
 
-MANDATORY ANTI-SLOP AI DIRECTIVES (CRAFT, ZERO SLOP & PURE CONTEXT ONLY):
+Your job in STAGE 1 is to analyze the user's prompt and architect a BESPOKE, INNOVATIVE Design & UX Blueprint in JSON.
+Do NOT write the HTML implementation in this stage — set "raw_html": "" so Stage 2 (the Dedicated Frontend Craftsman) can focus 100% of its token capacity on writing rich, unescaped HTML/CSS/Tailwind markup.
 
-1. PURE ONLY CONTEXT & ZERO FABRICATED FEATURES (R-17, R-18, R-28, R-36, R-38):
-   - Every single section, card, component, and metric MUST be 100% justified by what the user requested.
-   - ABSOLUTE HARD BANS ON UNREQUESTED BOILERPLATE:
-     * NO fake testimonials or reviews ("What our clients say", fictional avatars, fake quotes) (R-18).
-     * NO fake statistics or fabricated claims ("Trusted by 10,000+ teams", "99.99% satisfaction", "300% faster") without explicit source in brief (R-17, R-36).
-     * NO fake "Trusted By" company logo clouds (e.g. logos of Stripe, Google, Meta) (R-36).
-     * NO generic template FAQs ("Is my data secure?", "Can I cancel anytime?") (R-28).
-     * NO unrequested pricing tiers or subscription cards unless user explicitly requested pricing/paket/harga.
-     * NO navbar links pointing to ghost pages or sections that do not exist (R-24).
-   - WORKING WORKSPACE OVER PROMOTIONAL SLOP:
-     * If user asks for an application, system, or tool (e.g. "kanban board", "task management", "pos cashier", "clinic doctor schedule", "internal platform"):
-       Design the ACTUAL FUNCTIONAL WORKING WORKSPACE (navigation/sidebar, filter pills, dense data table/board lanes, status badges, action tools) — NEVER default to a generic promotional marketing landing page!
-   - MINIMAL BRIEFS: If the brief is minimal ("buat halaman login", "buat homepage sederhana"), emit ONLY the minimum focused sections (1-3 sections max) that fulfill that exact request. Never pad toward a generic 5-section template.
+CORE CREATIVE & ARCHITECTURAL MANDATES:
 
-2. VISUAL & COLOR SLOP BANS (R-01, R-10, R-11, R-12, R-13):
-   - FORBIDDEN AI COLOR CLICHÉS:
-     * NO generic violet/purple/indigo gradients (e.g. from-purple-600 to-indigo-600, from-violet-500 to-cyan-500) (R-01).
-     * NO blurry background radial orbs or floating colored blobs (R-01).
-     * NO excessive glow on cards, buttons, and borders simultaneously (R-13). Glow is capped at max 1 key focal accent or omitted entirely.
-     * NO full-page glassmorphism blur fatigue. Limit backdrop-blur to max 1 element (e.g. sticky header) or keep solid matte (R-10).
-     * NO overly soft muddy blur shadows that make everything float (R-12). Ground surfaces with crisp hairline borders (border-slate-200/80 in light, border-slate-800 in dark) and subtle elevation (shadow-sm).
-     * NO uniform pill-button fatigue (rounded-full on every button, badge, input, and card) (R-11). Use intentional radii hierarchy: tight pills for badges, 6-12px for cards, crisp edges for dockets/tickets.
-     * NO overused emojis as icons (🚀, ✨, ⚡, 💡, 🔥) (R-04). Use clean, crisp inline SVG icons only.
+1. ZERO TEMPLATE STYLING — 100% CONTEXT-DRIVEN ART DIRECTION:
+   - NEVER fall back to a generic corporate slate/white template! Every prompt has a unique industry soul, emotional temperature, and tactile metaphor:
+     * Culinary / Coffee / Bakery / Artisanal: Warm editorial parchment/espresso/terracotta tones, tactile menu cards, editorial serif display typography (Playfair Display / Fraunces), sensory microcopy, origin/tasting badges.
+     * Creative Studio / Architecture / Fashion / Portfolio: Brutalist or Asymmetric Editorial rhythm, dramatic oversized display typography (Syne / Space Grotesk / Instrument Serif), stark gallery contrast, numbered index dockets, full-bleed visual framing.
+     * FinTech / Crypto / Quant / Trading: High-precision telemetry, tabular-nums financial dockets, interactive-looking sparklines/candlesticks, multi-currency pills, crisp glass or obsidian depth.
+     * SaaS / AI / Developer / Canvas Tools: Spatial workspace aesthetic, interactive command bars (⌘K), live interactive-feeling product mockups (node graphs, code diffs, live status pipelines), kinetic bento grids.
+     * Healthcare / Wellness / EdTech / Consumer Mobile: Approachable organic geometry, calming biophilic or daylight surfaces, tactile progress rings, schedule timelines, human-centric cards.
+     * Enterprise ERP / Operations / POS / Kanban: High-density functional workspace (collapsible sidebar/rail, live filter chips, multi-status KPI cards with mini charts, rich interactive data tables or board lanes).
 
-3. DYNAMIC COMPOSITION & ANTI-TEMPLATE RHYTHM (R-05, R-14):
-   - Abolish the cookie-cutter template formula ("Centered Hero with 2 buttons -> Uniform 3-card grid -> Stats -> Footer").
-   - FORBIDDEN COPY-PASTE 3-CARD GRIDS: 3 identical cards with identical circle icons and 2 lines of text is the #1 AI slop tell.
-   - Use dynamic rhythm and functional asymmetry:
-     * Bento compositions with distinct card weights (e.g. 65% dominant feature/workflow + 35% live metric/filter).
-     * Split-screen narrative (left-heavy hierarchy, product-as-hero showcase).
-     * Interactive widgets embedded directly inside cards (steppers, status toggle pills, search with "⌘K", avatar stacks).
+2. DYNAMIC SPATIAL RHYTHM (ABOLISH MONOTONOUS BOX GRIDS):
+   - NEVER plan a boring "Centered Hero -> 3 Identical Icon Boxes -> Footer" wireframe.
+   - Plan varied, innovative section compositions in your sections[].purpose and sections[].data:
+     * Asymmetric Bento Grids (12-column spans like 7+5 or 8+4+4) where each cell has a distinct interactive widget, mini-chart, or visual preview.
+     * Editorial Split Showcases with overlapping floating status cards, live ticker strips, or interactive tabbed switchers.
+     * Functional Working Views (when the user asks for an app, dashboard, POS, kanban, booking, or tool, design the ACTUAL working application interface, not a marketing brochure).
 
-4. DOMAIN-ROOTED ART DIRECTION (GENUINE SOUL & MATERIALITY):
-   - The palette and typography must belong to the real-world material of the product:
-     * F&B, Bakery, Hospitality: Warm appetizing palette (creams #FDFBF7, warm ambers, terracotta, deep cocoa #382419), tactile order dockets, receipt cards with perforated edge details.
-     * Enterprise Ops, ERP, Legal, Internal Tools: Crisp neutral surfaces, high-contrast monochrome, dense tabular data, monospace metrics, clean status badges.
-     * Developer, SaaS, Cloud, Infrastructure: Slate-900 obsidian surfaces, hairline borders (border-slate-800), clean indigo/cyan accents, dark cards.
-     * FinTech, Ledger: Deep navy or crisp neutral alabaster, tabular monospace numerals, high-density compact tables, clear delta badges.
-     * Minimalist, Editorial: Bone/warm-white, stark deep black type, generous editorial whitespace, refined borders.
+3. GROUNDED CONTEXT & ANTI-HALLUCINATION DISCIPLINE:
+   - Never inject unrelated finance/CFO/treasury/virtual-card/crypto-wallet features unless the user's prompt is about finance/crypto.
+   - If the prompt is generic (e.g. "buat homepage sederhana" or "buat halaman login minimalis"), keep context.domain = null and right-size the sections to what was requested (e.g., login = 1 focused auth section; simple homepage = 2-3 focused sections) while still giving it world-class typographic and visual craft.
+   - Never add unrequested marketing fluff (fake customer reviews/testimonials, pricing tiers, or generic FAQ) to internal dashboards or minimal briefs unless requested.
+   - Every section MUST have a non-empty "requirement_source" (e.g. "primary_goal", "explicit:...", "composition:spatial_showcase").
 
-5. COPYWRITING & BUZZWORD BAN (R-16, R-36):
-   - FORBIDDEN AI VOCABULARY: Never use empty words: unlock, elevate, empower, delve, showcase, testament, landscape, journey, robust, game-changer, next-level, seamless, cutting-edge, revolutionize, supercharge.
-   - FORBIDDEN SIGNIFICANCE INFLATION: Never write "the future of...", "a new era of...", "marking a pivotal moment".
-   - CONCRETE HUMAN MICROCOPY: State exact utility, real actions, and authentic domain details in natural human language.
-
-6. FAST, COMPLETE & LEAN IMPLEMENTATION:
-   - Implement a complete, responsive HTML fragment using Pure Tailwind CSS utility classes directly on HTML elements.
-   - Do NOT output <style> tags or CSS blocks (use Tailwind utilities exclusively).
-   - One outer root element. Body content only — NO <html>/<head>/<body>, NO <script>, NO event handlers (NO onclick, NO onsubmit, NO on* attributes), NO <iframe>, NO javascript: URIs (use href="#" or button type="button").
-   - Responsive from 375px through desktop. Ensure input fields have text-base sm:text-sm to prevent mobile auto-zoom. Comfortable touch targets (min 44px height).
-   - Targeting IDs: Every section gets a unique data-rl-id and data-rl-kind="section". Key components get data-rl-id and data-rl-kind="component".
-   - Hard token budget: keep the entire response under ~4,500 tokens. Prefer fewer, denser, higher-craft sections over many thin ones.
-   - Output valid JSON only, no markdown fences, no commentary.
-
-OUTPUT JSON SCHEMA:
+OUTPUT JSON SCHEMA (Return valid JSON only, no markdown fences):
 {
-  "title": "Short descriptive page title",
+  "title": "Distinctive, authentic title matching the prompt",
   "page": {"type": "string", "purpose": "string", "complexity": "simple | moderate | complex"},
   "context": {"domain": null, "target_user": null},
   "goals": {"primary": "string"},
   "requirements": {"explicit": []},
+  "design_freedom": {"functional": "low", "visual": "high", "composition": "high"},
+  "layout": {
+    "type": "Specific spatial composition (e.g. Asymmetric Editorial Bento, Split Interactive Workspace, Brutalist Swiss Grid)",
+    "container": "max-w-7xl | w-full | max-w-md",
+    "alignment": "left | center",
+    "spacing": "dynamic rhythm"
+  },
+  "visual": {
+    "style": "Detailed art direction: surface textures, border physics, shadow depth, lighting, and custom visual motifs tailored to this prompt",
+    "density": "compact | balanced | generous",
+    "theme": "light | dark"
+  },
+  "typography": {
+    "heading": "Google Font name + expressive scale & tracking strategy",
+    "body": "Google Font name + readable measure",
+    "metadata": "Monospace font + tabular-nums telemetry"
+  },
   "sections": [
     {
-      "id": "string (e.g. sec-header, sec-hero, sec-catalog)",
-      "type": "string (e.g. navbar, hero, bento_grid, form, footer)",
-      "purpose": "string",
+      "id": "string (e.g. sec-header, sec-hero, sec-workspace, sec-bento)",
+      "type": "string (semantic section type)",
+      "purpose": "Detailed visual & compositional blueprint for how Stage 2 should build this section (layout spans, interactive widgets, SVG visuals, micro-details)",
       "priority": "high | medium | low",
-      "requirement_source": "string",
+      "requirement_source": "primary_goal | explicit:xxx | composition:xxx",
       "data": {
-        "title": "string",
+        "title": "Section headline",
+        "subtitle": "Supportive human copy",
+        "visual_blueprint": "Specific UI elements, interactive states, mini-charts, or custom layout details to render inside this section",
         "fields": [{"name": "string", "label": "string", "type": "string"}],
-        "social_buttons": ["Google", "GitHub"],
+        "social_buttons": [],
         "submit_label": "string"
       }
     }
   ],
-  "raw_html": "complete HTML fragment with Tailwind classes",
-  "theme": {"mode": "light | dark", "primary": "CSS color", "accent": "CSS color", "background": "CSS color", "foreground": "CSS color"}
-}
+  "raw_html": "",
+  "theme": {
+    "mode": "light | dark",
+    "primary": "Hex color tailored to prompt",
+    "accent": "Secondary hex accent color",
+    "background": "Canvas background hex color",
+    "foreground": "Primary text ink hex color",
+    "fontFamily": "Google Font name for body (e.g. Plus Jakarta Sans, DM Sans, Outfit, Inter)",
+    "headingFont": "Google Font name for display/headings (e.g. Playfair Display, Fraunces, Syne, Space Grotesk, Instrument Serif, Plus Jakarta Sans)",
+    "monoFont": "JetBrains Mono"
+  }
+}`
 
-WORKED EXAMPLE — MINIMAL BRIEF (what right-sized output looks like):
-User: "buat halaman login minimalis"
-Correct: 1 section of type "form" (email + password + submit), domain null, complexity simple. NO navbar, hero, features grid, testimonials, or footer, because none were asked for. raw_html is a single centered card. This is the standard for any brief whose request is minimal.
-User: "landing page bakery lengkap (hero, menu produk, tentang, kontak)"
-Correct: exactly the 4 requested sections (hero, product/menu grid, about, contact) plus a minimal footer, and nothing else. Do not add pricing, testimonials, stats, or a newsletter unless asked.`
+// Stage 2 Prompt: Dedicated Bespoke HTML/Tailwind/CSS Craftsman.
+// Receives the Stage 1 Architecture & Art Direction Blueprint and outputs PURE RAW HTML
+// (no JSON wrapper, no string escaping) so 100% of token capacity goes into visual craft.
+const bespokeHTMLCraftPrompt = `You are a World-Class Creative Frontend Engineer & Visual Designer (Awwwards, Linear, Stripe, Apple, Teenage Engineering caliber).
+
+You are executing STAGE 2 of the AI Design Compiler.
+You will receive the USER REQUEST and the STAGE 1 ART DIRECTION & SECTION BLUEPRINT.
+Your sole responsibility is to write the complete, self-contained, deeply innovative HTML + Tailwind CSS + scoped <style> implementation.
+
+CRITICAL OUTPUT FORMAT:
+- Output ONLY the raw HTML fragment (optionally starting with a <style> block, followed by a single outer root <div> or <main> container).
+- Do NOT wrap in JSON. Do NOT wrap in markdown code fences (` + "```" + `). Do NOT write any explanation before or after the HTML.
+
+HOW TO MAKE THE UI INNOVATIVE, ALIVE, AND NON-RIGID:
+
+1. BESPOKE VISUAL SOUL (NO GENERIC TEMPLATE BOXES):
+   - Follow the exact colors (` + "`theme.background`, `theme.foreground`, `theme.primary`, `theme.accent`" + `), fonts (` + "`theme.headingFont`, `theme.fontFamily`, `theme.monoFont`" + `), and ` + "`visual.style`" + ` from the Stage 1 Blueprint.
+   - Include a scoped ` + "`<style>`" + ` block at the top to define custom CSS variables, smooth keyframe animations (` + "`@keyframes float`, `@keyframes pulse-glow`" + `), custom atmospheric surface textures (subtle architectural grid, editorial grain, or refined mesh lighting), and custom utility classes.
+   - Apply ` + "`font-serif`" + ` or display font styling on headlines when a serif/display ` + "`headingFont`" + ` is chosen, creating dramatic typographic contrast (` + "`text-4xl sm:text-6xl tracking-tight leading-[1.06]`" + `) paired with crisp ` + "`font-mono tabular-nums`" + ` metadata tags.
+
+2. EXPRESSIVE SPATIAL COMPOSITION & BENTO RHYTHM:
+   - Never build flat, repetitive rows of identical cards!
+   - Use asymmetric Bento grids (` + "`grid-cols-1 md:grid-cols-12`" + ` with varied spans like ` + "`md:col-span-7`" + ` + ` + "`md:col-span-5`" + `, or ` + "`md:col-span-8`" + ` + ` + "`md:col-span-4`" + `), overlapping layered cards, split sticky narratives, or dense multi-pane workspaces.
+   - Inside cards and hero showcases, build **living UI artifacts**:
+     * Rich inline ` + "`<svg>`" + ` data visualizations (smooth area sparklines with gradient fill, radial progress gauges, node-graph connectors, audio waveforms, or custom architectural illustrations).
+     * Interactive-feeling controls: segmented tab pills (` + "`data-tab-group`" + ` / ` + "`data-tab-target`" + `), ` + "`<details class=\"group\"><summary>`" + ` accordions, status badges with animated pulse dots (` + "`animate-ping`" + `), keyboard shortcut badges (` + "`<kbd>`" + `), and hover micro-interactions (` + "`group-hover:translate-x-1 transition-all duration-300`" + `).
+     * When photography fits the domain (e-commerce, culinary, architecture, travel, lifestyle, fashion), use curated, reliable Unsplash image URLs (` + "`https://images.unsplash.com/photo-...`" + `) with ` + "`object-cover`" + `, graceful background color fallback, and overlaid glassmorphic badges.
+
+3. STRICT CONTRACT & SAFETY RULES:
+   - EVERY section listed in the Blueprint MUST be rendered in the HTML with its exact ` + "`data-rl-id=\"<section.id>\" data-rl-kind=\"section\"`" + ` attribute!
+   - Key interactive components (buttons, inputs, cards, navbars, tables) MUST include unique ` + "`data-rl-id=\"cmp-...\" data-rl-kind=\"component\"`" + ` attributes.
+   - Static HTML security: NO ` + "`<html>`" + `, ` + "`<head>`" + `, or ` + "`<body>`" + ` tags. NO ` + "`<script>`" + ` tags. NO inline JS event attributes (` + "`onclick`" + `, ` + "`onsubmit`" + `, ` + "`onchange`" + `). NO ` + "`javascript:`" + ` URIs (use ` + "`href=\"#...\"`" + ` or ` + "`type=\"button\"`" + `).
+   - Prohibited AI Slop: Do NOT use ` + "`from-purple-600 to-indigo-600`" + ` or ` + "`blur-3xl bg-purple-500/20`" + `. Do NOT use buzzwords (` + "`unlock, elevate, empower, delve, seamless, cutting-edge, revolutionize, supercharge`" + `). Write authentic, concrete human copy in the language of the user's prompt.
+   - If ` + "`context.domain`" + ` is null (generic prompt), NEVER invent finance/CFO/treasury/virtual-card/crypto terms.`
+
+// resolveFoundationGuide returns concrete palette, surface, border, and typography
+// directions when the user explicitly selects a foundation preset, or instructs the
+// LLM to invent a 100% context-driven visual direction when set to "auto"/empty.
+func resolveFoundationGuide(foundation, themeMode, accentColor string) string {
+	switch strings.ToLower(strings.TrimSpace(foundation)) {
+	case "raycast":
+		return "Explicit Preset (Raycast Keyboard Dark) — Deep obsidian background (#0B0C0E), elevated matte surface cards (#131519) with crisp top-edge highlight (border-white/[0.08]), electric coral (#FF6363) or indigo (#6366F1) accents, Plus Jakarta Sans + JetBrains Mono kbd shortcuts (⌘K)."
+	case "railway":
+		return "Explicit Preset (Railway Infrastructure) — Deep space dark canvas (#090A0F), terminal-inspired cards (#11131C) with subtle border-slate-800/90, violet (#8B5CF6) and cyan (#06B6D4) telemetry accents, monospace metrics and live status indicators."
+	case "attio":
+		return "Explicit Preset (Attio Fluid Workspace) — Crisp high-density workspace (#FFFFFF and #F8FAFC in light, #0D0F14 in dark), subtle 8px border radius, hairline borders (border-slate-200/90), royal blue (#2563EB) accents, multi-attribute status chips, tabular-nums data density."
+	case "calcom":
+		return "Explicit Preset (Cal.com / Editorial Warm Minimal) — Warm stone/alabaster surface (#FAF9F6 in light, #111111 in dark), stark high-contrast ink (#111827), expressive serif or geometric display headings (Instrument Serif / Playfair Display / Space Grotesk) paired with Plus Jakarta Sans, crisp borders and tactile button contrast."
+	case "mintlify":
+		return "Explicit Preset (Mintlify Crisp Technical) — Clean daylight/obsidian surfaces, emerald/teal (#0D9488 / #10B981) primary accents, clear hierarchical cards, Plus Jakarta Sans + JetBrains Mono."
+	case "ramp":
+		return "Explicit Preset (Ramp Clean Precision) — Alabaster slate (#F8FAFC) and crisp white (#FFFFFF) cards (or #0B0F17 in dark mode), sharp hairline borders, high-contrast slate-900 typography, emerald/indigo precision accents, and tabular-nums financial/operational clarity."
+	default:
+		modeHint := "Auto (choose light or dark based on what best fits the prompt's mood and industry)"
+		if themeMode == "dark" {
+			modeHint = "Dark Mode (craft a rich, atmospheric dark palette tailored to the prompt's domain — avoid generic flat slate)"
+		} else if themeMode == "light" {
+			modeHint = "Light Mode (craft a refined, tactile light palette tailored to the prompt's domain — warm paper, crisp alabaster, or domain-tinted surfaces)"
+		}
+		return "100% CONTEXT-DRIVEN BESPOKE ART DIRECTION (No Preset Template) — Derive the color palette, surface hierarchy, border/shadow treatment, and typography pairing directly from the user's prompt domain and vibe. Theme Mode: " + modeHint
+	}
+}
 
 // validateSynthesis enforces the same strictness the bespoke implementer used,
 // but only requires section-level targeting IDs at synthesis time (component
@@ -220,19 +277,16 @@ func validateSynthesis(syn *dtos.UIDesignSynthesisDTO, themeMode, accentColor st
 	} else {
 		return fmt.Errorf("no sections matched HTML targets")
 	}
+	if syn.Theme == nil {
+		syn.Theme = make(map[string]interface{})
+	}
 	if themeMode == "light" || themeMode == "dark" {
-		if syn.Theme == nil {
-			syn.Theme = make(map[string]interface{})
-		}
 		mode, _ := syn.Theme["mode"].(string)
 		if mode != themeMode {
 			syn.Theme["mode"] = themeMode
 		}
 	}
 	if accentColor != "" {
-		if syn.Theme == nil {
-			syn.Theme = make(map[string]interface{})
-		}
 		if syn.Theme["primary"] == nil || syn.Theme["primary"] == "" {
 			syn.Theme["primary"] = accentColor
 		}
@@ -243,28 +297,133 @@ func validateSynthesis(syn *dtos.UIDesignSynthesisDTO, themeMode, accentColor st
 	return nil
 }
 
-// synthesize performs the consolidated single-request generation: ONE LLM call
-// returns requirement analysis + design spec + sections + raw HTML + theme,
-// then local deterministic hardening (ID sanitization/dedup + requirement and
-// design rule enforcement) runs before the caller validates and reconstructs
-// the canonical DSL. A single bounded repair retry guards against JSON/HTML drift.
-func (c *UIDesignCompiler) synthesize(ctx context.Context, rawPrompt, device, foundation, themeMode, accentColor string) (*dtos.UIDesignSynthesisDTO, error) {
-	return c.synthesizeStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, nil)
+// extractStage2HTML extracts raw HTML whether the LLM returned pure HTML,
+// markdown-fenced HTML, or a JSON wrapper {"raw_html": "..."} / {"html": "..."}.
+func extractStage2HTML(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+		var wrapper map[string]interface{}
+		if err := json.Unmarshal([]byte(trimmed), &wrapper); err == nil {
+			if h, ok := wrapper["raw_html"].(string); ok && strings.TrimSpace(h) != "" {
+				return strings.TrimSpace(h)
+			}
+			if h, ok := wrapper["html"].(string); ok && strings.TrimSpace(h) != "" {
+				return strings.TrimSpace(h)
+			}
+		}
+	}
+	return sanitizeStaticHTML(trimmed)
 }
 
-func (c *UIDesignCompiler) synthesizeStream(ctx context.Context, rawPrompt, device, foundation, themeMode, accentColor string, onChunk LLMStreamCallback) (*dtos.UIDesignSynthesisDTO, error) {
+// craftBespokeHTMLStream executes STAGE 2 of the Multi-LLM Compiler Pipeline:
+// a dedicated LLM call using CallLLMTextStream (no JSON-escaping bottleneck!) that
+// turns the Stage 1 Art Direction & Section Blueprint into rich, bespoke HTML/Tailwind/CSS.
+func (c *UIDesignCompiler) craftBespokeHTMLStream(
+	ctx context.Context,
+	rawPrompt string,
+	device string,
+	themeMode string,
+	accentColor string,
+	syn *dtos.UIDesignSynthesisDTO,
+	onChunk LLMStreamCallback,
+) (string, error) {
+	blueprintSummary := map[string]interface{}{
+		"title":      syn.Title,
+		"page":       syn.Page,
+		"context":    syn.Context,
+		"goals":      syn.Goals,
+		"layout":     syn.Layout,
+		"visual":     syn.Visual,
+		"typography": syn.Typography,
+		"theme":      syn.Theme,
+		"sections":   syn.Sections,
+	}
+	blueprintBytes, _ := json.MarshalIndent(blueprintSummary, "", "  ")
+
+	var requiredSectionIDs []string
+	for _, s := range syn.Sections {
+		if s.ID != "" {
+			requiredSectionIDs = append(requiredSectionIDs, fmt.Sprintf(`%s (type: %s)`, s.ID, s.Type))
+		}
+	}
+
+	stage2UserPrompt := fmt.Sprintf(`USER REQUEST:
+%s
+
+TARGET DEVICE VIEWPORT: %s
+REQUESTED THEME MODE: %s
+REQUESTED ACCENT OVERRIDE: %s
+
+STAGE 1 ART DIRECTION & ARCHITECTURE BLUEPRINT:
+%s
+
+MANDATORY SECTION TARGETING IDS TO RENDER (each MUST have data-rl-id="<id>" data-rl-kind="section"):
+- %s
+
+Now craft the complete, bespoke, high-craft HTML + Tailwind CSS + scoped <style> implementation matching this exact Blueprint. Output raw HTML only:`,
+		rawPrompt,
+		device,
+		themeMode,
+		accentColor,
+		string(blueprintBytes),
+		strings.Join(requiredSectionIDs, "\n- "),
+	)
+
+	var htmlRaw string
+	var err error
+	if onChunk != nil {
+		htmlRaw, err = c.aiService.CallLLMTextStream(bespokeHTMLCraftPrompt, nil, stage2UserPrompt, onChunk)
+	} else {
+		htmlRaw, err = c.aiService.CallLLMText(bespokeHTMLCraftPrompt, nil, stage2UserPrompt)
+	}
+	if err != nil {
+		return "", err
+	}
+	return extractStage2HTML(htmlRaw), nil
+}
+
+// synthesize performs the multi-stage UI generation (or single-call fallback when
+// a pre-populated HTML fixture is supplied in unit tests).
+func (c *UIDesignCompiler) synthesize(ctx context.Context, rawPrompt, device, foundation, themeMode, accentColor string, opts ...dtos.CompileOptions) (*dtos.UIDesignSynthesisDTO, error) {
+	var opt dtos.CompileOptions
+	if len(opts) > 0 {
+		opt = opts[0]
+	}
+	return c.synthesizeStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, opt, nil)
+}
+
+func (c *UIDesignCompiler) synthesizeStream(ctx context.Context, rawPrompt, device, foundation, themeMode, accentColor string, opts dtos.CompileOptions, onChunk LLMStreamCallback) (*dtos.UIDesignSynthesisDTO, error) {
+	contextDetails := ""
+	if opts.Archetype != "" {
+		contextDetails += fmt.Sprintf("\nDESIGN ARCHETYPE: %s", opts.Archetype)
+	}
+	if opts.Density != "" {
+		contextDetails += fmt.Sprintf("\nSPACING DENSITY: %s", opts.Density)
+	}
+	if opts.ProductContext != "" {
+		contextDetails += fmt.Sprintf("\nPRODUCT CONTEXT: %s", opts.ProductContext)
+	}
+	if opts.PrimaryUser != "" {
+		contextDetails += fmt.Sprintf("\nPRIMARY USER: %s", opts.PrimaryUser)
+	}
+	if opts.PrimaryTask != "" {
+		contextDetails += fmt.Sprintf("\nPRIMARY TASK: %s", opts.PrimaryTask)
+	}
+
+	foundationGuide := resolveFoundationGuide(foundation, themeMode, accentColor)
+
 	userMessage := fmt.Sprintf(`USER REQUEST: %s
 
 TARGET DEVICE: %s
-DESIGN FOUNDATION: %s
+ART DIRECTION & FOUNDATION MODE: %s (%s)
 THEME MODE: %s
-ACCENT COLOR: %s
+ACCENT COLOR: %s%s
 
-CRITICAL SCOPING & TOKEN BOUNDS (apply strictly):
-- Common UI pattern does not equal user requirement. Every section must have a requirement_source tied to the brief or a justified composition need — navbar/hero/footer/cards are NOT automatic.
-- Right-size to this exact request: a minimal brief warrants only the sections it states. Do not pad toward a 3-5 section landing page for a one-part ask (e.g. login, simple homepage).
-- If user requests a "design system" or app (e.g. messaging, pos, dashboard), design the primary working application screen showcasing the cohesive design system in practice (3-5 focused sections maximum).
-- Do NOT generate an exhaustive 20-component library manual or multi-screen dump. Keep total output compact, high-craft, and strictly under 4,500 tokens. Output valid JSON matching the schema.`, rawPrompt, device, foundation, themeMode, accentColor)
+STAGE 1 ARCHITECTURAL DIRECTIVES:
+- Design a bespoke visual identity (theme colors, expressive Google Font pairings in theme.headingFont & theme.fontFamily, and spatial layout) tailored specifically to the user's prompt context — never a generic boilerplate template.
+- Plan each section with a clear visual_blueprint in section.data so Stage 2 can craft rich interactive widgets, inline SVG visualizations, and asymmetric Bento/editorial layouts.
+- Right-size to the brief: minimal requests (e.g. login page) get focused sections; full product/dashboard/landing requests get rich, functional workspace or showcase sections.
+- Set "raw_html": "" in this Stage 1 JSON blueprint.`, rawPrompt, device, foundation, foundationGuide, themeMode, accentColor, contextDetails)
 
 	var validationErr error
 	prompt := userMessage
@@ -285,6 +444,21 @@ CRITICAL SCOPING & TOKEN BOUNDS (apply strictly):
 		var syn dtos.UIDesignSynthesisDTO
 		validationErr = json.Unmarshal([]byte(c.aiService.SanitizeJSON(raw)), &syn)
 		if validationErr == nil {
+			syn.Sections = dedupeSynthesisSections(syn.Sections)
+
+			// STAGE 2: Dedicated Bespoke HTML/Tailwind Craftsman LLM Call.
+			// Triggered whenever Stage 1 returned a valid section blueprint with empty/minimal RawHTML
+			// (whilst preserving 1-call mock compatibility if a test fixture already supplied full RawHTML).
+			if len(syn.Sections) > 0 && len(strings.TrimSpace(syn.RawHTML)) < 150 {
+				craftedHTML, craftErr := c.craftBespokeHTMLStream(ctx, rawPrompt, device, themeMode, accentColor, &syn, onChunk)
+				if craftErr != nil {
+					validationErr = fmt.Errorf("stage 2 bespoke HTML craft failed: %w", craftErr)
+				} else {
+					syn.RawHTML = craftedHTML
+				}
+			}
+		}
+		if validationErr == nil {
 			syn.RawHTML = sanitizeStaticHTML(syn.RawHTML)
 			syn.RawHTML = sanitizeSynthesisHTMLIDs(syn.RawHTML)
 			syn.Sections = dedupeSynthesisSections(syn.Sections)
@@ -293,7 +467,7 @@ CRITICAL SCOPING & TOKEN BOUNDS (apply strictly):
 		if validationErr == nil {
 			return &syn, nil
 		}
-		prompt = userMessage + "\nThe previous output was invalid: " + validationErr.Error() + ". Return a complete corrected JSON implementation."
+		prompt = userMessage + "\nThe previous output was invalid: " + validationErr.Error() + ". Return a complete corrected JSON implementation with all required fields and raw_html."
 	}
 	return nil, fmt.Errorf("synthesis output invalid after one repair: %w", validationErr)
 }

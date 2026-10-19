@@ -53,7 +53,7 @@ services:
 
       - AI_PROVIDER=${AI_PROVIDER:-openai}
       - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
-      - OPEN_AI_MODEL=${OPEN_AI_MODEL:-gemini-3.8-flash}
+      - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-6-luna}
       - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
       - AI_MAX_TOKENS=${AI_MAX_TOKENS:-10000}
 
@@ -86,11 +86,11 @@ services:
       - AI_PROVIDER=${AI_PROVIDER:-openai}
 
       - OPENAI_API_KEY=${OPEN_AI_API_KEY}
-      - OPENAI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
+      - OPENAI_MODEL=${OPEN_AI_MODEL:-cx/gpt-6-luna}
       - OPENAI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
 
       - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
-      - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
+      - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-6-luna}
       - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
 
     expose:
@@ -121,10 +121,10 @@ services:
       - GO_BACKEND_URL=http://backend:8080
       - AI_PROVIDER=${AI_PROVIDER:-openai}
       - OPENAI_API_KEY=${OPEN_AI_API_KEY}
-      - OPENAI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
+      - OPENAI_MODEL=${OPEN_AI_MODEL:-cx/gpt-6-luna}
       - OPENAI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
       - OPEN_AI_API_KEY=${OPEN_AI_API_KEY}
-      - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-5.6-sol}
+      - OPEN_AI_MODEL=${OPEN_AI_MODEL:-cx/gpt-6-luna}
       - OPEN_AI_BASE_URL=${OPEN_AI_BASE_URL:-http://9router:20128/v1}
 
     restart: always

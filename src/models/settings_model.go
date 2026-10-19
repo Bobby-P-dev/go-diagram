@@ -45,7 +45,7 @@ func (m *settingsModel) Get() (*entities.WorkspaceSetting, error) {
 				ID:                "default",
 				DefaultMode:       "ui_design",
 				Theme:             "dark",
-				PreferredAIModel:  "ag/gemini-3.8-flash-high",
+				PreferredAIModel:  "cx/gpt-6-luna",
 				CanvasPreferences: json.RawMessage(`{"snap_to_grid": true, "grid_size": 20}`),
 			}, nil
 		}

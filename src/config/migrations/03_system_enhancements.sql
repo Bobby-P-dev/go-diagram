@@ -54,14 +54,14 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
     id VARCHAR(50) PRIMARY KEY DEFAULT 'default',
     default_mode VARCHAR(50) DEFAULT 'diagram',
     theme VARCHAR(50) DEFAULT 'dark',
-    preferred_ai_model VARCHAR(100) DEFAULT 'ag/gemini-3.8-flash-high',
+    preferred_ai_model VARCHAR(100) DEFAULT 'cx/gpt-6-luna',
     canvas_preferences JSONB DEFAULT '{"snap_to_grid": true, "grid_size": 20, "show_minimap": true}'::jsonb,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Seed awal untuk workspace_settings
 INSERT INTO workspace_settings (id, default_mode, theme, preferred_ai_model, canvas_preferences)
-VALUES ('default', 'ui_design', 'dark', 'ag/gemini-3.8-flash-high', '{"snap_to_grid": true, "grid_size": 20, "show_minimap": true}'::jsonb)
+VALUES ('default', 'ui_design', 'dark', 'cx/gpt-6-luna', '{"snap_to_grid": true, "grid_size": 20, "show_minimap": true}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed fondasi desain bawaan (Anti-Slop Foundations)

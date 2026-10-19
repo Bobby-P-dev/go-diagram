@@ -151,7 +151,7 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
 
 -- Initial Seeds for workspace_settings
 INSERT INTO workspace_settings (id, default_mode, theme, preferred_ai_model, canvas_preferences)
-VALUES ('default', 'ui_design', 'dark', 'cx/gpt-5.6-sol', '{"snap_to_grid": true, "grid_size": 20, "show_minimap": true}'::jsonb)
+VALUES ('default', 'ui_design', 'dark', 'cx/gpt-6-luna', '{"snap_to_grid": true, "grid_size": 20, "show_minimap": true}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
 -- Initial Seeds for design_foundations

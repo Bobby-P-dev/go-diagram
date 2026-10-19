@@ -46,13 +46,24 @@ func (tp *TargetedPatcher) ApplyTargetedPatch(
 		rawHtml = currentFrame.Implementation.Source.HTML
 	}
 
-	// 2. Identify target ID
+	// 2. Identify target ID (with semantic section fallback so chat requests without canvas selection still patch locally)
 	targetID := plan.Target.ID
 	if targetID == "" {
 		if plan.Target.ComponentID != "" {
 			targetID = plan.Target.ComponentID
 		} else if plan.Target.SectionID != "" {
 			targetID = plan.Target.SectionID
+		}
+	}
+	if targetID != "" && rawHtml != "" {
+		if _, _, _, findErr := findElementSnippet(rawHtml, targetID); findErr != nil {
+			if resolved := resolveSemanticSectionID(plan.Request, targetID, currentFrame, rawHtml); resolved != "" {
+				targetID = resolved
+			}
+		}
+	} else if targetID == "" && rawHtml != "" {
+		if resolved := resolveSemanticSectionID(plan.Request, "", currentFrame, rawHtml); resolved != "" {
+			targetID = resolved
 		}
 	}
 
@@ -304,6 +315,74 @@ func applyDeterministicSnippetPatch(snippet string, plan *dtos.ChangePlanDTO) (s
 	return snippet, ""
 }
 
+// resolveSemanticSectionID matches a user's natural-language request or partial section hint
+// against the actual sections present in currentFrame.Sections or rawHtml.
+func resolveSemanticSectionID(request, hint string, frame *dtos.UIFrameData, rawHtml string) string {
+	combined := strings.ToLower(request + " " + hint)
+	if frame != nil {
+		for _, sec := range frame.Sections {
+			secIDLow := strings.ToLower(sec.ID)
+			secTypeLow := strings.ToLower(sec.Type)
+			cleanID := strings.TrimPrefix(secIDLow, "sec-")
+			if cleanID != "" && strings.Contains(combined, cleanID) {
+				if _, _, _, err := findElementSnippet(rawHtml, sec.ID); err == nil {
+					return sec.ID
+				}
+			}
+			if secTypeLow != "" && strings.Contains(combined, secTypeLow) {
+				if _, _, _, err := findElementSnippet(rawHtml, sec.ID); err == nil {
+					return sec.ID
+				}
+			}
+		}
+	}
+	// Scan actual data-rl-id="sec-..." in rawHtml for keyword overlap
+	secRe := regexp.MustCompile(`data-rl-id=["'](sec-[^"']+)["']`)
+	for _, m := range secRe.FindAllStringSubmatch(rawHtml, -1) {
+		if len(m) > 1 {
+			cand := m[1]
+			tokens := strings.Split(strings.TrimPrefix(strings.ToLower(cand), "sec-"), "-")
+			for _, tok := range tokens {
+				if len(tok) >= 3 && strings.Contains(combined, tok) {
+					return cand
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// extractFrameStyleAndThemeContext extracts theme tokens and scoped <style> rules from the frame
+// so local patches and inserted sections preserve 100% of the page's bespoke visual DNA.
+func extractFrameStyleAndThemeContext(frame *dtos.UIFrameData) string {
+	if frame == nil {
+		return ""
+	}
+	var b strings.Builder
+	if len(frame.Theme) > 0 {
+		for _, k := range []string{"mode", "background", "surface", "foreground", "primary", "accent", "border", "fontFamily", "headingFont", "monoFont"} {
+			if v, ok := frame.Theme[k].(string); ok && v != "" {
+				b.WriteString(fmt.Sprintf("- theme.%s: %s\n", k, v))
+			}
+		}
+	}
+	rawHtml := frame.RawHtml
+	if rawHtml == "" && frame.CodeExport != nil {
+		rawHtml = frame.CodeExport["html"]
+	}
+	if styleMatch := regexp.MustCompile(`(?is)<style[^>]*>(.*?)</style>`).FindStringSubmatch(rawHtml); len(styleMatch) > 1 {
+		cssSnippet := strings.TrimSpace(styleMatch[1])
+		if len(cssSnippet) > 1200 {
+			cssSnippet = cssSnippet[:1200] + "\n/* ... */"
+		}
+		if cssSnippet != "" {
+			b.WriteString("EXISTING PAGE SCOPED <style> VARIABLES & UTILITIES:\n")
+			b.WriteString(cssSnippet + "\n")
+		}
+	}
+	return b.String()
+}
+
 // callLLMTargetedPatch uses the LLM to surgically modify only the target snippet.
 func (tp *TargetedPatcher) callLLMTargetedPatch(
 	ctx context.Context,
@@ -312,34 +391,36 @@ func (tp *TargetedPatcher) callLLMTargetedPatch(
 	plan *dtos.ChangePlanDTO,
 	frame *dtos.UIFrameData,
 ) (string, string, error) {
-	accentColor := "#D4AF37"
-	if frame.Theme != nil {
+	accentColor := "#6366f1"
+	if frame != nil && frame.Theme != nil {
 		if prim, ok := frame.Theme["primary"].(string); ok && prim != "" {
 			accentColor = prim
 		}
 	}
+	themeAndStyleDNA := extractFrameStyleAndThemeContext(frame)
 
 	systemPrompt := `You are a Surgical AI UI Code Editor for RancangLab.
-Your goal is to modify ONLY the provided HTML snippet to fulfill the user's edit instruction.
+Your goal is to modify ONLY the provided HTML snippet to fulfill the user's edit instruction while keeping 100% visual harmony with the page's existing design system, palette, typography, and custom CSS classes.
 
 STRICT EDIT RULES:
-1. Maintain data-rl-id and id markers on elements.
-2. Use modern Tailwind CSS classes conforming to the aesthetic style.
+1. Maintain the outer element's data-rl-id, data-rl-kind, and id attributes intact.
+2. Harmonize colors, surfaces, borders, and font classes (font-serif, font-mono, custom CSS variables) with the provided PAGE DESIGN SYSTEM DNA.
 3. DO NOT output markdown code blocks, backticks, or explanation. Output ONLY the raw HTML replacement.
 4. DO NOT alter elements or sections outside this target.
 5. In-page links must use #anchors (e.g. #products, #story). Never use relative links like /products or /.
-6. ANTI-SLOP: Do NOT add generic AI purple/blue gradients or blurry glow orbs. Use concrete, human copy (no buzzwords like "supercharge", "seamless", "elevate"). Maintain pure context without inventing unrequested features.
+6. ANTI-SLOP: Do NOT add generic AI purple/blue gradients or blurry glow orbs. Use concrete, human copy in the same language as the snippet.
 `
 
 	userPrompt := fmt.Sprintf(`Target ID: %s
 User Instruction: %s
 Scope: %s
 Primary Accent: %s
-
+PAGE DESIGN SYSTEM DNA:
+%s
 ORIGINAL SNIPPET:
 %s
 
-Return ONLY the updated HTML snippet:`, targetID, plan.Request, plan.Scope, accentColor, snippet)
+Return ONLY the updated HTML snippet:`, targetID, plan.Request, plan.Scope, accentColor, themeAndStyleDNA, snippet)
 
 	resp, err := tp.aiService.CallLLMText(systemPrompt, nil, userPrompt)
 	if err != nil {
@@ -588,21 +669,25 @@ func (tp *TargetedPatcher) generateSectionMarkup(
 		device = frame.Device
 	}
 
-	sysPrompt := fmt.Sprintf(`You are an expert Tailwind CSS UI section generator for RancangLab.
-Generate a SINGLE complete, bespoke, beautiful HTML section matching the user request.
+	themeAndStyleDNA := extractFrameStyleAndThemeContext(frame)
+
+	sysPrompt := fmt.Sprintf(`You are an expert Tailwind CSS UI section craftsman for RancangLab.
+Generate a SINGLE complete, bespoke, high-craft HTML section matching the user request and harmonizing 100%% with the existing page's visual DNA.
 Context:
 - Project / Page: %s
 - Theme mode: %s
 - Accent color: %s
 - Target device: %s
+PAGE DESIGN SYSTEM DNA:
+%s
 
 CRAFT & QUALITY RULES:
-1. Wrap everything in a single root <section data-rl-id="sec-[type]-[unique]" class="..."> tag.
-2. Every interactive element, heading, button, or card must have data-rl-id="cmp-[type]-[unique]".
-3. Use Pure Tailwind CSS utility classes exclusively. Harmonize surfaces, typography, border radius, and contrast with the existing %s theme.
-4. For timeline/roadmap/schedule requests: render a sophisticated vertical or horizontal timeline with chronological step cards, status indicators (done/active/pending badges), timestamps, and sleek connecting lines.
+1. Wrap everything in a single root <section data-rl-id="sec-[type]-[unique]" data-rl-kind="section" class="..."> tag.
+2. Every interactive element, heading, button, or card must have data-rl-id="cmp-[type]-[unique]" data-rl-kind="component".
+3. Use Tailwind CSS utility classes and any custom classes/variables from PAGE DESIGN SYSTEM DNA so surfaces, typography (font-serif, font-mono), border treatment, and contrast match the rest of the page seamlessly.
+4. Use asymmetric Bento grids, rich inline SVG visualizations, or expressive editorial layouts rather than flat 3-equal-card boilerplate.
 5. Provide realistic, human microcopy and data. Do not use Lorem Ipsum.
-6. Output ONLY the raw HTML section, no markdown fences, no explanation.`, titleContext, themeMode, accentColor, device, themeMode)
+6. Output ONLY the raw HTML section, no markdown fences, no explanation.`, titleContext, themeMode, accentColor, device, themeAndStyleDNA)
 
 	userMsg := fmt.Sprintf(`Section Request: %q
 Page Device: %s`, plan.Request, device)

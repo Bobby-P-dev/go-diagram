@@ -99,6 +99,14 @@ type CreateUIDesignRequest struct {
 	TemplateID     string `json:"template_id,omitempty"`
 }
 
+type CompileOptions struct {
+	Archetype      string `json:"archetype,omitempty"`
+	Density        string `json:"density,omitempty"`
+	ProductContext string `json:"product_context,omitempty"`
+	PrimaryUser    string `json:"primary_user,omitempty"`
+	PrimaryTask    string `json:"primary_task,omitempty"`
+}
+
 type PageSpecificationDTO struct {
 	PageName           string   `json:"page_name"`
 	Purpose            string   `json:"purpose"`

@@ -51,6 +51,72 @@ func resolveUIDesignThemeMode(req dtos.CreateUIDesignRequest) string {
 	return "auto"
 }
 
+func inferDesignIntent(prompt string, req *dtos.CreateUIDesignRequest) dtos.CompileOptions {
+	pLower := strings.ToLower(prompt)
+	opts := dtos.CompileOptions{
+		Archetype:      req.Archetype,
+		Density:        req.Density,
+		ProductContext: req.ProductContext,
+		PrimaryUser:    req.PrimaryUser,
+		PrimaryTask:    req.PrimaryTask,
+	}
+
+	// Infer Archetype if not explicitly provided
+	if opts.Archetype == "" {
+		if strings.Contains(pLower, "no-code") || strings.Contains(pLower, "builder") || strings.Contains(pLower, "figjam") || strings.Contains(pLower, "canvas") || strings.Contains(pLower, "whiteboard") || strings.Contains(pLower, "miro") {
+			opts.Archetype = "canvas_tool"
+		} else if strings.Contains(pLower, "erp") || strings.Contains(pLower, "dashboard") || strings.Contains(pLower, "analytics") || strings.Contains(pLower, "procurement") || strings.Contains(pLower, "supply chain") || strings.Contains(pLower, "crm") || strings.Contains(pLower, "monitoring") || strings.Contains(pLower, "admin") {
+			opts.Archetype = "dashboard"
+		} else if strings.Contains(pLower, "pos") || strings.Contains(pLower, "kasir") || strings.Contains(pLower, "cashier") {
+			opts.Archetype = "pos"
+		} else if strings.Contains(pLower, "kanban") || strings.Contains(pLower, "scrum") || strings.Contains(pLower, "trello") {
+			opts.Archetype = "kanban"
+		} else if strings.Contains(pLower, "booking") || strings.Contains(pLower, "reservasi") || strings.Contains(pLower, "jadwal") || strings.Contains(pLower, "appointment") {
+			opts.Archetype = "booking"
+		} else if strings.Contains(pLower, "login") || strings.Contains(pLower, "auth") || strings.Contains(pLower, "masuk") || strings.Contains(pLower, "register") {
+			opts.Archetype = "form"
+		} else if strings.Contains(pLower, "landing") || strings.Contains(pLower, "homepage") || strings.Contains(pLower, "beranda") || strings.Contains(pLower, "studio") || strings.Contains(pLower, "agency") || strings.Contains(pLower, "portfolio") {
+			opts.Archetype = "saas_landing"
+		}
+	}
+
+	// Infer ProductContext if not explicitly provided
+	if opts.ProductContext == "" {
+		if strings.Contains(pLower, "erp") || strings.Contains(pLower, "procurement") || strings.Contains(pLower, "enterprise") || strings.Contains(pLower, "logistik") || strings.Contains(pLower, "inventory") {
+			opts.ProductContext = "erp"
+		} else if strings.Contains(pLower, "saas") || strings.Contains(pLower, "no-code") || strings.Contains(pLower, "builder") || strings.Contains(pLower, "platform") || strings.Contains(pLower, "devops") || strings.Contains(pLower, "cloud") || strings.Contains(pLower, "ai") {
+			opts.ProductContext = "saas"
+		} else if strings.Contains(pLower, "ecommerce") || strings.Contains(pLower, "e-commerce") || strings.Contains(pLower, "toko") || strings.Contains(pLower, "shop") || strings.Contains(pLower, "bakery") || strings.Contains(pLower, "kue") || strings.Contains(pLower, "pastry") || strings.Contains(pLower, "resto") || strings.Contains(pLower, "f&b") || strings.Contains(pLower, "coffee") || strings.Contains(pLower, "kopi") || strings.Contains(pLower, "fashion") {
+			opts.ProductContext = "ecommerce"
+		} else if strings.Contains(pLower, "fintech") || strings.Contains(pLower, "bank") || strings.Contains(pLower, "wallet") || strings.Contains(pLower, "dompet") || strings.Contains(pLower, "pembayaran") || strings.Contains(pLower, "payment") {
+			opts.ProductContext = "fintech"
+		} else if strings.Contains(pLower, "clinic") || strings.Contains(pLower, "klinik") || strings.Contains(pLower, "dokter") || strings.Contains(pLower, "hospital") || strings.Contains(pLower, "medis") || strings.Contains(pLower, "kesehatan") {
+			opts.ProductContext = "healthcare"
+		} else if strings.Contains(pLower, "arsitektur") || strings.Contains(pLower, "architecture") || strings.Contains(pLower, "editorial") || strings.Contains(pLower, "journal") || strings.Contains(pLower, "luxury") || strings.Contains(pLower, "studio") {
+			opts.ProductContext = "editorial"
+		}
+	}
+
+	// Infer Density if not explicitly provided
+	if opts.Density == "" {
+		if opts.Archetype == "dashboard" || opts.ProductContext == "erp" || opts.Archetype == "pos" {
+			opts.Density = "compact"
+		} else if opts.Archetype == "canvas_tool" || opts.Archetype == "saas_landing" {
+			opts.Density = "balanced"
+		} else if opts.ProductContext == "editorial" {
+			opts.Density = "generous"
+		}
+	}
+
+	// Preserve "auto" when user did not explicitly lock a foundation preset,
+	// allowing the Art Director LLM to craft a 100% bespoke, prompt-driven visual language.
+	if strings.TrimSpace(req.Foundation) == "" {
+		req.Foundation = "auto"
+	}
+
+	return opts
+}
+
 func buildUIDesignPrompt(req dtos.CreateUIDesignRequest) string {
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
@@ -61,6 +127,18 @@ func buildUIDesignPrompt(req dtos.CreateUIDesignRequest) string {
 	}
 	if context := strings.TrimSpace(req.ProductContext); context != "" {
 		prompt += "\nProduct context: " + context
+	}
+	if arch := strings.TrimSpace(req.Archetype); arch != "" {
+		prompt += "\nDesign archetype: " + arch
+	}
+	if density := strings.TrimSpace(req.Density); density != "" {
+		prompt += "\nSpacing density: " + density
+	}
+	if user := strings.TrimSpace(req.PrimaryUser); user != "" {
+		prompt += "\nPrimary user: " + user
+	}
+	if task := strings.TrimSpace(req.PrimaryTask); task != "" {
+		prompt += "\nPrimary task: " + task
 	}
 	return prompt
 }
@@ -360,7 +438,7 @@ func (s *uiDesignService) GenerateUIDesignStream(
 				}
 			}
 
-			if tokenCounter-lastEmitted >= 60 || strings.Contains(delta, `data-rl-id="sec-`) {
+			if tokenCounter-lastEmitted >= 60 || strings.Contains(delta, `data-rl-id="sec-`) || strings.Contains(delta, "</section>") {
 				lastEmitted = tokenCounter
 				msg := "Menyusun komponen antarmuka & kode Tailwind..."
 				currentSec := ""
@@ -383,20 +461,43 @@ func (s *uiDesignService) GenerateUIDesignStream(
 					msg = "Menyelesaikan footer & struktur penutup..."
 				}
 
-				onEvent("progress", map[string]interface{}{
+				// Extract progressive HTML snapshot once Stage 2 raw HTML streaming starts
+				previewHTML := ""
+				if divIdx := strings.Index(bufStr, "<div"); divIdx != -1 {
+					rawCandidate := bufStr[divIdx:]
+					// Only stream progressive HTML when it is unescaped raw HTML (Stage 2)
+					if !strings.Contains(rawCandidate[:min(len(rawCandidate), 120)], `\"`) && len(rawCandidate) > 220 {
+						previewHTML = rawCandidate
+						if lastSecClose := strings.LastIndex(previewHTML, "</section>"); lastSecClose != -1 {
+							previewHTML = previewHTML[:lastSecClose+len("</section>")] + "\n</div>"
+						} else if lastHeaderClose := strings.LastIndex(previewHTML, "</header>"); lastHeaderClose != -1 {
+							previewHTML = previewHTML[:lastHeaderClose+len("</header>")] + "\n</div>"
+						}
+					}
+				}
+
+				progressPayload := map[string]interface{}{
 					"stage":          "generating",
 					"tokens":         tokenCounter,
 					"chars":          charCounter,
 					"message":        msg,
 					"sections":       detectedSections,
 					"active_section": currentSec,
-				})
+				}
+				if previewHTML != "" {
+					progressPayload["preview_html"] = previewHTML
+				}
+				onEvent("progress", progressPayload)
 			}
 		}
 	}
 
-	// Compile UI Design through the 11-Layer AI Design Compiler
-	dsl, err := s.compiler.CompileStream(ctx, prompt, device, foundation, themeMode, accentColor, onChunk)
+	// Infer design intent and compile UI Design through the AI Design Compiler
+	compileOpts := inferDesignIntent(prompt, &req)
+	if foundation == "" && req.Foundation != "" {
+		foundation = strings.ToLower(strings.TrimSpace(req.Foundation))
+	}
+	dsl, err := s.compiler.CompileStream(ctx, prompt, device, foundation, themeMode, accentColor, onChunk, compileOpts)
 	if err != nil {
 		return nil, fmt.Errorf("ai compiler execution failed: %w", err)
 	}
@@ -1071,6 +1172,7 @@ func (s *uiDesignService) appendNewUIFrame(
 	var targetUser string
 	var pagePurpose string
 	var brandSnippet string
+	var screen1DesignDNA strings.Builder
 
 	if len(currentNodes) > 0 {
 		if currentFrameData, ok := currentNodes[0]["data"].(map[string]interface{}); ok {
@@ -1083,6 +1185,11 @@ func (s *uiDesignService) appendNewUIFrame(
 				}
 				if prim, ok := m["primary"].(string); ok {
 					accentColor = prim
+				}
+				for _, k := range []string{"background", "surface", "foreground", "primary", "accent", "border", "fontFamily", "headingFont", "monoFont"} {
+					if v, ok := m[k].(string); ok && v != "" {
+						screen1DesignDNA.WriteString(fmt.Sprintf("  * theme.%s: %s\n", k, v))
+					}
 				}
 			}
 			if reqSpec, ok := currentFrameData["requirement_spec"].(map[string]interface{}); ok {
@@ -1106,6 +1213,15 @@ func (s *uiDesignService) appendNewUIFrame(
 				firstHtml, _ = currentFrameData["rawHtml"].(string)
 			}
 			if firstHtml != "" {
+				if styleMatch := regexp.MustCompile(`(?is)<style[^>]*>(.*?)</style>`).FindStringSubmatch(firstHtml); len(styleMatch) > 1 {
+					cssSnippet := strings.TrimSpace(styleMatch[1])
+					if len(cssSnippet) > 1200 {
+						cssSnippet = cssSnippet[:1200] + "\n/* ... */"
+					}
+					if cssSnippet != "" {
+						screen1DesignDNA.WriteString("  * SCREEN 1 SCOPED <style> TOKENS & ANIMATIONS:\n" + cssSnippet + "\n")
+					}
+				}
 				// Search for any navigation container (sidebar, topbar, header)
 				for _, navId := range []string{"sec-sidebar", "sec-top-navigation", "sec-header", "sec-navbar-global", "sec-topbar", "navbar", "header", "aside"} {
 					if snip, _, _, err := findElementSnippet(firstHtml, navId); err == nil && snip != "" {
@@ -1199,12 +1315,16 @@ func (s *uiDesignService) appendNewUIFrame(
 	}
 
 	if themeMode != "" || accentColor != "" {
-		consistencyPrompt.WriteString(fmt.Sprintf("- Tema Visual: Mode %s, Aksen Warna %s. Pertahankan tone warna latar, border, dan font yang identik dengan Screen 1.\n", themeMode, accentColor))
+		consistencyPrompt.WriteString(fmt.Sprintf("- Tema Visual: Mode %s, Aksen Warna %s. Pertahankan tone warna latar, border, dan pasangan font yang 100%% identik dengan Screen 1.\n", themeMode, accentColor))
+	}
+	if screen1DesignDNA.Len() > 0 {
+		consistencyPrompt.WriteString("- DESIGN SYSTEM DNA DARI SCREEN 1 (WAJIB DIPERTAHANKAN):\n")
+		consistencyPrompt.WriteString(screen1DesignDNA.String())
 	}
 
 	consistencyPrompt.WriteString(`- ATURAN KETAT ANTI-SLOP (PURE ONLY CONTEXT & ZERO HALLUCINATION):
   1. DILARANG KERAS membuat seksi promosi marketing klise (testimoni fiktif, ulasan rating bintang, FAQ template, tabel pricing, logo bar 'Trusted by') KECUALI diminta secara eksplisit.
-  2. Halaman baru harus menjadi bagian fungsional nyata dari domain sistem Screen 1, bukan landing page promosi SaaS.
+  2. Halaman baru harus menjadi bagian fungsional nyata dari domain sistem Screen 1.
   3. DILARANG menggunakan gradien ungu-indigo klise AI (from-purple-600 to-indigo-600), background glow orbs, atau 3 kartu seragam copy-paste.
   4. DILARANG menggunakan kata-kata AI klise (supercharge, seamless, unlock, revolutionize). Gunakan bahasa manusia konkret.
 `)
@@ -1214,20 +1334,14 @@ func (s *uiDesignService) appendNewUIFrame(
 		if effectiveBrand == "" {
 			effectiveBrand = firstFrameTitle
 		}
-		consistencyPrompt.WriteString(fmt.Sprintf(`- INSTRUKSI KHUSUS HALAMAN LOGIN / AUTHENTICATION:
-  1. PERINGATAN KERAS ANTI-HALLUCINATION: DILARANG KERAS membuat navbar marketing SaaS publik (seperti 'Solutions', 'Pricing', 'Infrastructure', 'Cluster Status', 'Documentation', 'Enterprise Helpdesk', 'Auth Gateway v2.4', 'API Status', dsb).
-  2. Ini adalah portal autentikasi internal resmi karyawan/organisasi untuk %s (%s).
-  3. IDENTITAS BRAND & JUDUL: Wajib menampilkan logo dan nama brand '%s' secara persis (JANGAN menggunakan nama brand atau portal SaaS acak). Judul halaman harus menggunakan brand '%s'.
-  4. Header / Navigasi: Minimalis atau terintegrasi langsung di atas form login. Hanya tampilkan logo resmi Screen 1 dan status keamanan/lingkungan (misal badge 'SSO Protected', 'Corporate Gateway', atau 'Internal Network').
-  5. Form Login Utama:
-     - Card login yang presisi, clean, dan profesional di tengah layar (atau split layout minimalis).
-     - Opsi login Corporate SSO ('Sign in with Corporate SSO' / SAML / Okta) sebagai opsi utama karyawan.
-     - Input Corporate Email (@perusahaan) dan Password dengan styling Tailwind yang halus dan serasi.
-     - Opsi 'Ingat saya di perangkat ini' dan link 'Bantuan Akses IT / Hubungi Admin'.
-  6. Catatan Kepatuhan: Sertakan disclaimer keamanan korporat ringkas di bagian bawah card login.
-  7. Skema Warna & Estetika: Latar belakang, card, dan warna aksen (%s) harus 100%%%% serasi dengan Screen 1.
-  8. ATURAN STATIC MARKUP: DILARANG KERAS menyertakan event handler JavaScript (seperti onsubmit="return false", onclick, onchange) dan DILARANG menggunakan href="javascript:void(0)". Gunakan tag <form> standar dan href="#" atau <button type="button">.
-`, effectiveBrand, productDomain, effectiveBrand, effectiveBrand, accentColor))
+		consistencyPrompt.WriteString(fmt.Sprintf(`- INSTRUKSI KHUSUS HALAMAN LOGIN / AUTHENTICATION (ADAPTIF SESUAI KONTEKS DOMAIN SCREEN 1):
+  1. IDENTITAS BRAND & JUDUL: Wajib menampilkan logo dan nama brand '%s' secara persis dengan estetika, palet warna (%s), dan tipografi Screen 1.
+  2. KONTEKS AUDIENS (%s — %s):
+     - Jika Screen 1 adalah produk konsumen, lifestyle, kuliner, e-commerce, atau kreatif: rancang pengalaman login/member yang berkarakter sesuai mood brand (misal split editorial showcase + form login/member yang elegan), BUKAN portal IT korporat kaku.
+     - Jika Screen 1 adalah sistem enterprise, ERP, atau infrastruktur B2B: rancang portal autentikasi organisasi yang presisi dengan dukungan SSO/kredensial kerja.
+  3. Jangan menambahkan navbar marketing penuh atau section promosi yang tidak relevan dengan proses autentikasi.
+  4. ATURAN STATIC MARKUP: DILARANG KERAS menyertakan event handler JavaScript (seperti onsubmit="return false", onclick, onchange) dan DILARANG menggunakan href="javascript:void(0)". Gunakan tag <form> standar dan href="#" atau <button type="button">.
+`, effectiveBrand, accentColor, productDomain, targetUser))
 	} else {
 		if isSidebarLayout && navSnippet != "" && len(navSnippet) < 3000 {
 			consistencyPrompt.WriteString(fmt.Sprintf("- LAYOUT SIDEBAR: Screen 1 menggunakan Sidebar navigasi. Pertahankan Sidebar yang sama persis dengan Screen 1 (logo, menu, styling) dan aktifkan item menu yang relevan dengan halaman baru ini:\n%s\n", navSnippet))

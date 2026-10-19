@@ -2,7 +2,10 @@ import time
 import json
 import re
 import logging
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
 from typing import Dict, Any, Optional, List
 from openai import OpenAI
 try:
@@ -182,6 +185,13 @@ def implementation_errors(frame_data: UIFrameData) -> List[str]:
     html = (frame_data.raw_html or "").strip()
     if not html:
         return ["raw_html is empty; return the complete implementation"]
+    if BeautifulSoup is None:
+        errors = []
+        if not re.search(r"<(main|div|section|form|article|header)\b", html, re.I):
+            errors.append("HTML has no interface root")
+        if re.search(r"<(script|iframe|object|embed)\b", html, re.I):
+            errors.append("Use HTML/CSS and native controls, without scripts or embeds")
+        return errors
     soup = BeautifulSoup(html, "html.parser")
     errors = []
     if not soup.find(["main", "div", "section", "form", "article", "header"]):
@@ -209,13 +219,18 @@ def ensure_code_export(frame_data: UIFrameData, design_system: Optional[Dict[str
     if not html:
         raise ValueError("UI synthesis did not produce HTML; refusing to substitute a generic template")
     frame_data.raw_html = html
-    soup = BeautifulSoup(html, "html.parser")
-    styles = []
-    for style in soup.find_all("style"):
-        styles.append(style.get_text())
-        style.decompose()
-    template = str(soup.body.decode_contents() if soup.body else soup)
-    css = "\n".join(styles)
+    if BeautifulSoup is None:
+        styles = re.findall(r"<style[^>]*>([\s\S]*?)</style>", html, re.I)
+        template = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", html, flags=re.I).strip()
+        css = "\n".join(styles)
+    else:
+        soup = BeautifulSoup(html, "html.parser")
+        styles = []
+        for style in soup.find_all("style"):
+            styles.append(style.get_text())
+            style.decompose()
+        template = str(soup.body.decode_contents() if soup.body else soup)
+        css = "\n".join(styles)
     frame_data.code_export = {
         "html": html,
         "tailwind": html,
@@ -234,7 +249,7 @@ class UIDesignStudioCrew:
             timeout=60.0,
             max_retries=1,
         )
-        self.model = settings.openai_model or "ag/gemini-3.8-flash"
+        self.model = settings.openai_model or "cx/gpt-6-luna"
 
     def execute(self, raw_prompt: str, device: str = "web",
                 foundation: Optional[str] = None, theme_mode: Optional[str] = None,
@@ -252,51 +267,42 @@ class UIDesignStudioCrew:
         theme_mode = theme_mode or "auto"
         foundation = foundation or ""
         accent_color = accent_color or ""
-        executed = ["DirectBespokeUISynthesizer"]
+        executed = ["Stage1_ArtDirectorBlueprint", "Stage2_BespokeHTMLCraftsman"]
 
-        candidates = {
-            key: design_system.get(key)
-            for key in ("category", "style", "colors", "typography")
-        }
-
-        system_prompt = (
-            "You are a Principal UI/UX Engineer and Visual Designer. "
-            "Your task is to generate a bespoke, production-ready UI interface based on the user's prompt. "
-            "Output must be strictly raw valid JSON without markdown fences, conforming to UIFrameSynthesisDTO."
+        stage1_system = (
+            "You are an Avant-Garde Creative Director and Principal Product Architect. "
+            "Analyze the user's prompt and design a bespoke, 100% context-driven UI Blueprint. "
+            "Do NOT use rigid corporate SaaS templates. Let the user's domain, mood, and audience dictate the palette, typography, and layout. "
+            "Return ONLY valid raw JSON without markdown fences."
         )
 
-        user_prompt_text = (
+        stage1_user = (
             f"USER REQUEST: {raw_prompt}\n"
             f"TARGET DEVICE: {device} (viewport {width}x{height})\n"
             f"EXPLICIT HINTS: foundation={foundation!r}, theme_mode={theme_mode!r}, accent={accent_color!r}\n"
-            f"RETRIEVED DESIGN TOKENS: {json.dumps(candidates, ensure_ascii=False)}\n"
             f"{format_reference_context(ref_dto)}\n\n"
-            "MANDATORY REQUIREMENTS:\n"
-            "1. Output format: Return a single raw JSON object with keys: title, device, width, height, theme, sections, raw_html.\n"
-            "2. theme: must be an object with keys: mode ('dark' or 'light'), primary, background, text, accent, border.\n"
-            "3. sections: array of objects with keys: id (e.g. 'sec-1', 'sec-hero'), type (semantic section type), title, data (headline and items).\n"
-            "4. raw_html: Complete, self-contained HTML fragment with embedded <style> and Tailwind CSS v3 classes.\n"
-            "   - Single root container element (e.g. <div class='w-full min-h-screen ...'>).\n"
-            "   - NO <html>, <head>, or <body> tags. NO external script tags or JavaScript code.\n"
-            "   - Every section MUST have a unique data-rl-id and data-rl-kind='section' matching the sections array in JSON.\n"
-            "   - Every interactive component (buttons, inputs, cards) MUST have a unique data-rl-id and data-rl-kind='component'.\n"
-            "   - Design MUST be 100% tailored to the requested domain. Write authentic, domain-appropriate copy. Never use placeholder or hardcoded bakery templates.\n"
-            "   - Fully responsive layout for the specified device viewport."
+            "Return a JSON object with:\n"
+            "1. 'title': Specific brand/product title matching the prompt.\n"
+            "2. 'device': target device string.\n"
+            "3. 'width': integer width, 'height': integer height.\n"
+            "4. 'theme': {'mode': 'dark'|'light', 'primary': '#hex', 'background': '#hex', 'text': '#hex', 'accent': '#hex', 'border': '#hex', 'font_family': 'Google Font', 'heading_font': 'Google Font', 'mono_font': 'Google Font'}.\n"
+            "5. 'sections': array of 4-6 context-specific sections, each with {'id': 'sec-...', 'type': '...', 'title': '...', 'visual_blueprint': 'detailed layout & component choreography', 'data': {'headline': '...', 'subtitle': '...', 'items': [...]}}.\n"
+            "6. 'raw_html': '' (leave empty string; Stage 2 will craft the HTML)."
         )
 
-        logger.info(f"[UIDesignStudioCrew] Calling OpenAI directly for prompt: {raw_prompt[:60]}...")
-        resp = self.client.chat.completions.create(
+        logger.info(f"[UIDesignStudioCrew] Stage 1 (Blueprint) for prompt: {raw_prompt[:60]}...")
+        resp1 = self.client.chat.completions.create(
             model=self.model,
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt_text},
+                {"role": "system", "content": stage1_system},
+                {"role": "user", "content": stage1_user},
             ],
-            temperature=0.3,
+            temperature=0.65,
             max_tokens=4000,
             stream=False,
         )
 
-        raw_content = resp.choices[0].message.content.strip()
+        raw_content = resp1.choices[0].message.content.strip()
         if raw_content.startswith("```"):
             lines = raw_content.splitlines()
             if lines[0].startswith("```"):
@@ -323,7 +329,47 @@ class UIDesignStudioCrew:
                         pass
 
         if not parsed_data or not isinstance(parsed_data, dict):
-            raise ValueError(f"Failed to parse model response into JSON: {raw_content[:200]}")
+            raise ValueError(f"Failed to parse Stage 1 blueprint into JSON: {raw_content[:200]}")
+
+        # Stage 2: Dedicated Bespoke HTML/CSS/Tailwind Craftsman (no JSON escaping overhead)
+        if not parsed_data.get("raw_html") or len(str(parsed_data.get("raw_html", "")).strip()) < 150:
+            stage2_system = (
+                "You are a World-Class Creative Technologist & Principal Frontend Craftsman (Awwwards / Linear / Raycast / Editorial caliber). "
+                "Turn the Stage 1 Design Blueprint into a breathtaking, tactile, bespoke HTML + Tailwind CSS v3 + scoped <style> interface. "
+                "Output ONLY the raw HTML fragment starting with <div and ending with </div>. Do NOT wrap in JSON or markdown fences."
+            )
+            stage2_user = (
+                f"ORIGINAL USER PROMPT: {raw_prompt}\n"
+                f"TARGET DEVICE: {device} ({width}x{height})\n"
+                f"STAGE 1 DESIGN BLUEPRINT:\n{json.dumps(parsed_data, ensure_ascii=False, indent=2)}\n\n"
+                "CRAFTING RULES:\n"
+                "1. Output ONLY a single root <div class='w-full min-h-screen ...'>...</div> container.\n"
+                "2. Include a Google Fonts <link> and a scoped <style> block inside the root <div> defining custom CSS variables, subtle textures, and @keyframes micro-interactions.\n"
+                "3. Every section in STAGE 1 DESIGN BLUEPRINT must be rendered as a <section id='...' data-rl-id='...' data-rl-kind='section'> with the exact matching ID.\n"
+                "4. Interactive elements (buttons, inputs, cards, tabs) must include unique data-rl-id='cmp-...' and data-rl-kind='component'.\n"
+                "5. Use asymmetric bento grids, rich data visualizations (inline SVG charts, sparklines, status pills, command bars, realistic domain data), and expressive typography. Never use generic 3-equal-card boilerplate.\n"
+                "6. NO <script> tags, NO inline event handlers (onclick, onload), NO external JS."
+            )
+            logger.info(f"[UIDesignStudioCrew] Stage 2 (Bespoke HTML Craftsman) for prompt: {raw_prompt[:60]}...")
+            resp2 = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": stage2_system},
+                    {"role": "user", "content": stage2_user},
+                ],
+                temperature=0.65,
+                max_tokens=12000,
+                stream=False,
+            )
+            html_out = resp2.choices[0].message.content.strip()
+            if html_out.startswith("```"):
+                lines = html_out.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                html_out = "\n".join(lines).strip()
+            parsed_data["raw_html"] = html_out
 
         # Normalize theme
         theme_val = parsed_data.get("theme")

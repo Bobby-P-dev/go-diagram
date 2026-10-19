@@ -21,12 +21,13 @@ var (
 	disallowedRawJavascript = regexp.MustCompile(`(?i)javascript\s*:\s*(?:void\s*\(\s*0\s*\)|;)?`)
 	disallowedSlopGradient  = regexp.MustCompile(`(?i)\bfrom-(?:purple|violet)-[56]00\s+(?:via-[a-z]+-[56]00\s+)?to-(?:indigo|purple)-[67]00\b`)
 	disallowedGlowBlob      = regexp.MustCompile(`(?is)<div\b[^>]*class="[^"]*\bblur-[23]xl\b[^"]*\bbg-(?:purple|indigo|violet|pink)-[456]00/[123]0\b[^"]*"[^>]*>\s*</div>`)
+	rigidWidthPattern       = regexp.MustCompile(`\bw-\[(?:[89]\d\d|1[0-9]\d\d)px\]`)
 )
 
 // sanitizeStaticHTML cleanses LLM-generated HTML by stripping scripts,
 // embedding tags, document wrappers, inline event handlers, and javascript: URIs.
-// This ensures the canvas fragment remains 100% static, safe, and valid without
-// causing validation failures or triggering expensive LLM repair loops.
+// It also enforces responsive layout rules (preventing rigid wide pixel boxes and
+// ensuring tables are enclosed in horizontal overflow containers for 375px mobile safety).
 func sanitizeStaticHTML(htmlStr string) string {
 	if htmlStr == "" {
 		return htmlStr
@@ -64,6 +65,15 @@ func sanitizeStaticHTML(htmlStr string) string {
 	// 5. Clean AI Slop visual clichés (generic purple/indigo gradients and blurry glow orbs)
 	htmlStr = disallowedSlopGradient.ReplaceAllString(htmlStr, "from-slate-900 to-slate-950")
 	htmlStr = disallowedGlowBlob.ReplaceAllString(htmlStr, "")
+
+	// 6. Replace rigid fixed widths that break mobile viewports
+	htmlStr = rigidWidthPattern.ReplaceAllString(htmlStr, "w-full max-w-7xl mx-auto")
+
+	// 7. Responsive Table Protection: Guarantee all tables have horizontal scroll container
+	if strings.Contains(strings.ToLower(htmlStr), "<table") && !strings.Contains(strings.ToLower(htmlStr), "overflow-x-auto") && !strings.Contains(strings.ToLower(htmlStr), "overflow-auto") {
+		tableRegex := regexp.MustCompile(`(?is)(<table\b[^>]*>.*?</table>)`)
+		htmlStr = tableRegex.ReplaceAllString(htmlStr, `<div class="w-full overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 my-2">$1</div>`)
+	}
 
 	return strings.TrimSpace(htmlStr)
 }

@@ -33,8 +33,9 @@ func (c *UIDesignCompiler) Compile(
 	foundation string,
 	themeMode string,
 	accentColor string,
+	opts ...dtos.CompileOptions,
 ) (*dtos.UIDesignDSL, error) {
-	return c.CompileStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, nil)
+	return c.CompileStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, nil, opts...)
 }
 
 func (c *UIDesignCompiler) CompileStream(
@@ -45,14 +46,20 @@ func (c *UIDesignCompiler) CompileStream(
 	themeMode string,
 	accentColor string,
 	onChunk LLMStreamCallback,
+	opts ...dtos.CompileOptions,
 ) (*dtos.UIDesignDSL, error) {
 	// Fallback sanitization
 	if device == "" {
 		device = "web"
 	}
 
+	var compileOpt dtos.CompileOptions
+	if len(opts) > 0 {
+		compileOpt = opts[0]
+	}
+
 	// STAGE 1: SINGLE-CALL SYNTHESIS (analyze + plan + implement in one round-trip)
-	syn, err := c.synthesizeStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, onChunk)
+	syn, err := c.synthesizeStream(ctx, rawPrompt, device, foundation, themeMode, accentColor, compileOpt, onChunk)
 	if err != nil {
 		return nil, fmt.Errorf("stage 1 synthesis failed: %w", err)
 	}
@@ -91,25 +98,29 @@ func (c *UIDesignCompiler) CompileStream(
 		}
 	}
 
-	// Strip any hallucinated sections removed by UIValidator from the raw HTML
+	// Strip any hallucinated sections removed by UIValidator from the raw HTML using balanced tag boundary scanning
 	for _, stripped := range validationResult.StrippedSections {
 		parts := strings.Split(stripped, ":")
 		secID := strings.TrimSpace(parts[0])
 		if secID != "" {
-			pattern := regexp.MustCompile(fmt.Sprintf(`(?is)<(?:section|div|header|footer|aside)\b[^>]*data-rl-id=["']%s["'][^>]*>.*?</(?:section|div|header|footer|aside)>`, regexp.QuoteMeta(secID)))
-			syn.RawHTML = pattern.ReplaceAllString(syn.RawHTML, "")
+			if _, startIdx, endIdx, findErr := findElementSnippet(syn.RawHTML, secID); findErr == nil && startIdx >= 0 && endIdx > startIdx {
+				syn.RawHTML = strings.TrimSpace(syn.RawHTML[:startIdx]) + "\n" + strings.TrimSpace(syn.RawHTML[endIdx:])
+			} else {
+				pattern := regexp.MustCompile(fmt.Sprintf(`(?is)<(?:section|div|header|footer|aside)\b[^>]*data-rl-id=["']%s["'][^>]*>.*?</(?:section|div|header|footer|aside)>`, regexp.QuoteMeta(secID)))
+				syn.RawHTML = pattern.ReplaceAllString(syn.RawHTML, "")
+			}
 		}
 	}
 	// If domain is null (generic prompt), cleanse prohibited hallucinated terms from syn.RawHTML and DesignSpec
 	if reqSpec.Context.Domain == nil {
 		prohibitedReplacements := map[string]string{
-			"cfo": "Team",
-			"treasury": "Account",
-			"virtual card": "Feature",
-			"credit limit": "Access",
+			"cfo":           "Team",
+			"treasury":      "Account",
+			"virtual card":  "Feature",
+			"credit limit":  "Access",
 			"crypto wallet": "Wallet",
-			"crypto": "Digital",
-			"blockchain": "Platform",
+			"crypto":        "Digital",
+			"blockchain":    "Platform",
 		}
 		for ph, repl := range prohibitedReplacements {
 			patt := regexp.MustCompile(fmt.Sprintf(`(?i)\b%s\b`, regexp.QuoteMeta(ph)))
@@ -149,6 +160,7 @@ func (c *UIDesignCompiler) CompileStream(
 	if foundation != "" && foundation != "auto" {
 		generatedTheme["palette"] = foundation
 	}
+	enrichThemeTypography(generatedTheme, foundation, rawPrompt, compileOpt.ProductContext)
 
 	// Map to PageSpecification & DesignDecisions for backwards compatibility and Spec tab inspection
 	pageSpec := &dtos.PageSpecificationDTO{
@@ -243,6 +255,54 @@ func extractComponentTypes(sections []dtos.UISectionDTO) []string {
 		types = append(types, s.Type)
 	}
 	return types
+}
+
+// enrichThemeTypography ensures generatedTheme carries curated Google Font pairings
+// when the LLM omitted theme.fontFamily, matching the foundation and domain aesthetic.
+func enrichThemeTypography(theme map[string]interface{}, foundation, rawPrompt, productContext string) {
+	if theme == nil {
+		return
+	}
+	pLower := strings.ToLower(rawPrompt + " " + productContext)
+	fLower := strings.ToLower(strings.TrimSpace(foundation))
+
+	hasFont := false
+	if ff, ok := theme["fontFamily"].(string); ok && strings.TrimSpace(ff) != "" {
+		hasFont = true
+	}
+
+	if !hasFont {
+		switch {
+		case strings.Contains(pLower, "bakery") || strings.Contains(pLower, "kue") || strings.Contains(pLower, "pastry") ||
+			strings.Contains(pLower, "luxury") || strings.Contains(pLower, "editorial") || strings.Contains(pLower, "hotel") ||
+			strings.Contains(pLower, "elegan") || strings.Contains(pLower, "japanese") || strings.Contains(pLower, "coffee"):
+			theme["fontFamily"] = "Plus Jakarta Sans"
+			if _, ok := theme["headingFont"]; !ok {
+				theme["headingFont"] = "Playfair Display"
+			}
+		case strings.Contains(pLower, "brutalist") || strings.Contains(pLower, "arsitektur") || strings.Contains(pLower, "architecture") ||
+			strings.Contains(pLower, "studio") || strings.Contains(pLower, "creative"):
+			theme["fontFamily"] = "DM Sans"
+			if _, ok := theme["headingFont"]; !ok {
+				theme["headingFont"] = "Space Grotesk"
+			}
+		case fLower == "railway" || fLower == "raycast" || strings.Contains(pLower, "devops") || strings.Contains(pLower, "terminal") || strings.Contains(pLower, "developer"):
+			theme["fontFamily"] = "Plus Jakarta Sans"
+			if _, ok := theme["monoFont"]; !ok {
+				theme["monoFont"] = "JetBrains Mono"
+			}
+		case fLower == "calcom":
+			theme["fontFamily"] = "Plus Jakarta Sans"
+			if _, ok := theme["headingFont"]; !ok {
+				theme["headingFont"] = "Instrument Serif"
+			}
+		default:
+			theme["fontFamily"] = "Plus Jakarta Sans"
+			if _, ok := theme["monoFont"]; !ok {
+				theme["monoFont"] = "JetBrains Mono"
+			}
+		}
+	}
 }
 
 // sectionTargetPattern matches data-rl-id="..." (section/component targeting).
@@ -456,100 +516,90 @@ func generateVueCodeExport(title string, sections []dtos.UISectionDTO, themeMode
 			}()))
 
 		case "product_grid", "features", "card_grid", "grid":
-			pTitle := "Fitur & Kapabilitas Utama"
+			pTitle := "Highlighted Capabilities"
 			if t, ok := sec.Data["title"].(string); ok && t != "" {
 				pTitle = t
 			} else if h, ok := sec.Data["headline"].(string); ok && h != "" {
 				pTitle = h
 			}
-			pSub := "Dirancang secara modular untuk memberikan efisiensi operasional dan akurasi tinggi."
+			pSub := ""
 			if s, ok := sec.Data["subtitle"].(string); ok && s != "" {
 				pSub = s
 			} else if d, ok := sec.Data["description"].(string); ok && d != "" {
 				pSub = d
 			}
 
-			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Feature & Content Grid Section -->
-    <section id="products" data-rl-id="sec-products" data-rl-kind="section" class="w-full px-6 py-16 max-w-7xl mx-auto border-b %s">
+			type cardItem struct {
+				Title string
+				Desc  string
+				Tag   string
+			}
+			var cards []cardItem
+			if rawItems, ok := sec.Data["items"].([]interface{}); ok {
+				for idx, it := range rawItems {
+					switch v := it.(type) {
+					case string:
+						cards = append(cards, cardItem{
+							Title: v,
+							Desc:  "",
+							Tag:   fmt.Sprintf("0%d", idx+1),
+						})
+					case map[string]interface{}:
+						cTitle, _ := v["title"].(string)
+						if cTitle == "" {
+							cTitle, _ = v["name"].(string)
+						}
+						cDesc, _ := v["description"].(string)
+						if cDesc == "" {
+							cDesc, _ = v["subtitle"].(string)
+						}
+						cTag, _ := v["badge"].(string)
+						if cTag == "" {
+							cTag = fmt.Sprintf("0%d", idx+1)
+						}
+						if cTitle != "" {
+							cards = append(cards, cardItem{Title: cTitle, Desc: cDesc, Tag: cTag})
+						}
+					}
+				}
+			}
+			if len(cards) == 0 {
+				cards = []cardItem{
+					{Title: pTitle, Desc: pSub, Tag: "01"},
+				}
+			}
+
+			borderCls := "border-slate-200"
+			cardCls := "border-slate-200 bg-white shadow-xs"
+			if isDark {
+				borderCls = "border-slate-800/80"
+				cardCls = "border-slate-800 bg-slate-900/50"
+			}
+
+			var cardsHTML strings.Builder
+			for idx, c := range cards {
+				cardsHTML.WriteString(fmt.Sprintf(`        <div data-rl-id="cmp-card-%d" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between text-left hover:shadow-lg transition-shadow">
+          <div class="space-y-3">
+            <span class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">%s</span>
+            <h3 class="font-bold text-base">%s</h3>
+            <p class="text-xs opacity-70 leading-relaxed">%s</p>
+          </div>
+        </div>
+`, idx+1, cardCls, accentColor, c.Tag, c.Title, c.Desc))
+			}
+
+			templateBuilder.WriteString(fmt.Sprintf(`    <!-- Dynamic Content Grid Section -->
+    <section id="%s" data-rl-id="%s" data-rl-kind="section" class="w-full px-6 py-16 max-w-7xl mx-auto border-b %s">
       <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4 text-left">
         <div>
-          <span class="text-xs font-bold uppercase tracking-widest" style="color: %s">Kategori Utama</span>
           <h2 class="text-2xl sm:text-3xl font-bold tracking-tight mt-1">%s</h2>
           <p class="text-sm opacity-70 mt-1 max-w-xl">%s</p>
         </div>
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        <div data-rl-id="cmp-card-1" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between text-left hover:shadow-lg transition-shadow">
-          <div class="space-y-3">
-            <span class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">01</span>
-            <h3 class="font-bold text-base">Modul Analisis Data</h3>
-            <p class="text-xs opacity-70 leading-relaxed">Pengolahan informasi secara real-time dengan visualisasi metrik yang akurat dan terstruktur.</p>
-          </div>
-          <div class="mt-6 pt-3 border-t %s flex items-center justify-between text-xs font-semibold">
-            <span class="opacity-60">Status: Siap</span>
-            <span style="color: %s">Lihat Rincian →</span>
-          </div>
-        </div>
-        <div data-rl-id="cmp-card-2" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between text-left hover:shadow-lg transition-shadow">
-          <div class="space-y-3">
-            <span class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">02</span>
-            <h3 class="font-bold text-base">Integrasi & Alur Kerja</h3>
-            <p class="text-xs opacity-70 leading-relaxed">Sinkronisasi otomatis antar komponen dengan protokol API yang aman dan terstandarisasi.</p>
-          </div>
-          <div class="mt-6 pt-3 border-t %s flex items-center justify-between text-xs font-semibold">
-            <span class="opacity-60">Status: Terhubung</span>
-            <span style="color: %s">Lihat Rincian →</span>
-          </div>
-        </div>
-        <div data-rl-id="cmp-card-3" data-rl-kind="component" class="p-6 rounded-2xl border %s flex flex-col justify-between text-left hover:shadow-lg transition-shadow">
-          <div class="space-y-3">
-            <span class="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold text-white" style="background-color: %s">03</span>
-            <h3 class="font-bold text-base">Keamanan & Kontrol Akses</h3>
-            <p class="text-xs opacity-70 leading-relaxed">Manajemen otorisasi granular memastikan keamanan data dan kepatuhan standar industri.</p>
-          </div>
-          <div class="mt-6 pt-3 border-t %s flex items-center justify-between text-xs font-semibold">
-            <span class="opacity-60">Status: Terproteksi</span>
-            <span style="color: %s">Lihat Rincian →</span>
-          </div>
-        </div>
-      </div>
+%s      </div>
     </section>
-`, func() string {
-				if isDark {
-					return "border-slate-800/80"
-				}
-				return "border-slate-200"
-			}(), accentColor, pTitle, pSub, func() string {
-				if isDark {
-					return "border-slate-800 bg-slate-900/50"
-				}
-				return "border-slate-200 bg-white shadow-xs"
-			}(), accentColor, func() string {
-				if isDark {
-					return "border-slate-800"
-				}
-				return "border-slate-100"
-			}(), accentColor, func() string {
-				if isDark {
-					return "border-slate-800 bg-slate-900/50"
-				}
-				return "border-slate-200 bg-white shadow-xs"
-			}(), accentColor, func() string {
-				if isDark {
-					return "border-slate-800"
-				}
-				return "border-slate-100"
-			}(), accentColor, func() string {
-				if isDark {
-					return "border-slate-800 bg-slate-900/50"
-				}
-				return "border-slate-200 bg-white shadow-xs"
-			}(), accentColor, func() string {
-				if isDark {
-					return "border-slate-800"
-				}
-				return "border-slate-100"
-			}(), accentColor))
+`, sec.ID, sec.ID, borderCls, pTitle, pSub, cardsHTML.String()))
 
 		case "spotlight", "brand_story", "about":
 			sTitle := "Arsitektur & Komitmen Kualitas"

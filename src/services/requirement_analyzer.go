@@ -162,36 +162,64 @@ func enforceRequirementRules(spec *dtos.RequirementSpecificationDTO) *dtos.Requi
 	// Deterministic rule enforcement
 	lowerPrompt := strings.ToLower(spec.RawPrompt)
 
-	// Ensure DesignFreedom is initialized
+	// Ensure DesignFreedom is initialized with high creative freedom by default
 	if spec.DesignFreedom == nil {
 		spec.DesignFreedom = &dtos.DesignFreedomDTO{
-			Functional: "low",
-			Visual:     "medium",
+			Functional:  "medium",
+			Visual:      "high",
+			Composition: "high",
 		}
 	} else {
-		// Functional freedom is always conservatively low unless explicitly asked
-		spec.DesignFreedom.Functional = "low"
+		if spec.DesignFreedom.Functional == "" {
+			spec.DesignFreedom.Functional = "low"
+		}
+		if spec.DesignFreedom.Visual == "" || spec.DesignFreedom.Visual == "medium" {
+			spec.DesignFreedom.Visual = "high"
+		}
+		if spec.DesignFreedom.Composition == "" || spec.DesignFreedom.Composition == "medium" {
+			spec.DesignFreedom.Composition = "high"
+		}
 	}
 
-	// Domain grounding check: If prompt does not mention any explicit business domain,
-	// keep domain null to prevent hallucinated domain anchoring on generic prompts.
-	domainKeywords := []string{
-		"erp", "procurement", "kue", "bakery", "pastry", "makanan", "food", "restoran", "restaurant",
-		"tari", "dance", "klinik", "clinic", "hospital", "rumah sakit", "sekolah", "school",
-		"universitas", "toko", "shop", "ecommerce", "e-commerce", "buku", "book", "fashion",
-		"hotel", "travel", "properti", "real estate", "game", "gaming", "fitness", "gym",
-		"crypto", "bank", "fintech", "pos", "kasir", "point of sale", "logistik", "logistic",
+	// Domain grounding check: Only clear domain when the prompt is strictly generic
+	// (e.g. "buat homepage sederhana", "buat halaman login minimalis") or contains prohibited hallucinated terms.
+	genericPrompts := []string{
+		"buat homepage sederhana",
+		"buat halaman login minimalis",
+		"buat login page minimalis",
+		"simple homepage",
+		"minimal login page",
 	}
-	hasDomainKeyword := false
-	for _, dk := range domainKeywords {
-		if strings.Contains(lowerPrompt, dk) {
-			hasDomainKeyword = true
+	isStrictlyGeneric := false
+	trimmedLower := strings.TrimSpace(lowerPrompt)
+	for _, gp := range genericPrompts {
+		if trimmedLower == gp {
+			isStrictlyGeneric = true
 			break
 		}
 	}
-	if !hasDomainKeyword {
+
+	prohibited := []string{"treasury", "cfo", "virtual card", "credit limit", "crypto", "blockchain"}
+	hasProhibitedInPrompt := false
+	for _, bad := range prohibited {
+		if strings.Contains(lowerPrompt, bad) {
+			hasProhibitedInPrompt = true
+			break
+		}
+	}
+
+	if isStrictlyGeneric {
 		spec.Context.Domain = nil
-		prohibited := []string{"treasury", "cfo", "virtual card", "credit limit", "crypto", "blockchain"}
+	} else if spec.Context.Domain != nil && !hasProhibitedInPrompt {
+		for _, bad := range prohibited {
+			if strings.Contains(strings.ToLower(*spec.Context.Domain), bad) {
+				spec.Context.Domain = nil
+				break
+			}
+		}
+	}
+
+	if !hasProhibitedInPrompt {
 		for _, bad := range prohibited {
 			re := regexp.MustCompile(fmt.Sprintf(`(?i)\b%s\b`, regexp.QuoteMeta(bad)))
 			spec.Goals.Primary = re.ReplaceAllString(spec.Goals.Primary, "feature")
@@ -214,11 +242,8 @@ func enforceRequirementRules(spec *dtos.RequirementSpecificationDTO) *dtos.Requi
 		spec.Page.Complexity = "simple"
 	}
 
-	// Minimal describes an aesthetic, not missing content. Preserve the model's
-	// grounded domain and composition instead of narrowing to a keyword whitelist.
-	if strings.Contains(lowerPrompt, "kreatif") || strings.Contains(lowerPrompt, "creative") || strings.Contains(lowerPrompt, "experimental") || strings.Contains(lowerPrompt, "bold") {
-		spec.DesignFreedom.Visual = "high"
-	}
+	// Always preserve high visual freedom unless explicitly constrained
+	spec.DesignFreedom.Visual = "high"
 
 	// Login & Auth Specific Enforcement:
 	isLogin := spec.Page.Type == "login" || strings.Contains(lowerPrompt, "login") || strings.Contains(lowerPrompt, "masuk")

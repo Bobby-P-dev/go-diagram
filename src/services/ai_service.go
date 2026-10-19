@@ -131,6 +131,8 @@ JSON OUTPUT STRUCTURE:
       "id": "string (unique identifier, e.g. 'e-users-orders')",
       "source": "string (id of source node)",
       "target": "string (id of target node)",
+      "sourceHandle": "string (optional connector handle: 'top', 'bottom', 'left', 'right')",
+      "targetHandle": "string (optional connector handle: 'top', 'bottom', 'left', 'right')",
       "label": "string (optional descriptive relationship, protocol, or condition)"
     }
   ]
@@ -230,7 +232,11 @@ func (s *AIService) GenerateDiagram(
 			systemPrompt += "\n- MANDATORY: Design relational database tables. Every entity node MUST use type: 'database' with rich 'columns' (PK, FK, constraints, types) and relational edges (1:N, 1:1, N:M)." +
 				"\n- STRICT ERD RULE: DO NOT generate any 'lane' property. ERD diagrams MUST be pure relational table structures without swimlanes, lanes, or departmental bands. Keep 'lane' empty or omit it completely."
 		case "flowchart", "workflow":
-			systemPrompt += "\n- MANDATORY: Design a procedural step-by-step flowchart. Use 'input' (start), 'decision' (branches with Yes/No edges), 'default' (action steps), and 'output' (end/terminal)."
+			systemPrompt += "\n- MANDATORY: Design a procedural step-by-step flowchart. Use 'input' (start), 'decision' (branches with Yes/No edges), 'default' (action steps), and 'output' (end/terminal)." +
+				"\n- FLOWCHART CONNECTOR ROUTING RULES:" +
+				"\n  1. For 'decision' branches: Primary/positive branch (e.g. 'Yes', 'Valid', 'Success') MUST use sourceHandle: 'bottom' and targetHandle: 'top'. Secondary/negative/retry branch (e.g. 'No', 'Invalid', 'Failed') MUST use sourceHandle: 'right' (or 'left') and targetHandle: 'top' to prevent overlapping connector lines." +
+				"\n  2. For regular sequential steps: connect sourceHandle: 'bottom' to targetHandle: 'top'." +
+				"\n  3. Every step must logically connect to a downstream node or terminal output node. Do NOT leave dead ends."
 		case "architecture", "system":
 			systemPrompt += "\n- MANDATORY: Design system architecture. Use 'input' (clients/CDN), 'decision' (gateways/load balancers), 'default' (services/message queues), and 'database' (storage/cache)."
 		case "sequence", "interaction":
@@ -316,27 +322,74 @@ func (s *AIService) GenerateDiagram(
 		return nil, "", fmt.Errorf("failed to parse graph JSON from AI response: %w\nraw response: %s", err, rawText)
 	}
 
-	if len(graph.Nodes) == 0 {
-		return nil, "", fmt.Errorf("AI returned empty nodes array")
-	}
-
-	// For non-swimlane diagrams (especially ERD/database), ensure 'lane' is stripped to prevent accidental swimlanes
-	isSwimlane := strings.ToLower(diagramType) == "swimlane" || strings.ToLower(diagramType) == "bpmn"
-	if !isSwimlane {
-		for i := range graph.Nodes {
-			graph.Nodes[i].Data.Lane = ""
-		}
+	sanitizedNodes, sanitizedEdges := validateAndSanitizeGraph(graph.Nodes, graph.Edges, diagramType)
+	if len(sanitizedNodes) == 0 {
+		return nil, "", fmt.Errorf("AI returned no valid nodes")
 	}
 
 	chatAssistantMessage := strings.TrimSpace(graph.Message)
 	if chatAssistantMessage == "" {
-		chatAssistantMessage = fmt.Sprintf("Diagram updated with %d nodes and %d connections.", len(graph.Nodes), len(graph.Edges))
+		chatAssistantMessage = fmt.Sprintf("Diagram updated with %d nodes and %d connections.", len(sanitizedNodes), len(sanitizedEdges))
 	}
 
 	return &dtos.GraphPayload{
-		Nodes: graph.Nodes,
-		Edges: graph.Edges,
+		Nodes: sanitizedNodes,
+		Edges: sanitizedEdges,
 	}, chatAssistantMessage, nil
+}
+
+func validateAndSanitizeGraph(nodes []dtos.GraphNode, edges []dtos.GraphEdge, diagramType string) ([]dtos.GraphNode, []dtos.GraphEdge) {
+	if len(nodes) == 0 {
+		return nodes, nil
+	}
+
+	isSwimlane := strings.ToLower(diagramType) == "swimlane" || strings.ToLower(diagramType) == "bpmn"
+
+	// 1. Deduplicate node IDs and build valid node ID set
+	seenNodeIDs := make(map[string]bool)
+	sanitizedNodes := make([]dtos.GraphNode, 0, len(nodes))
+
+	for _, node := range nodes {
+		id := strings.TrimSpace(node.ID)
+		if id == "" {
+			continue
+		}
+		if seenNodeIDs[id] {
+			continue // deduplicate node ID
+		}
+		seenNodeIDs[id] = true
+
+		// Strip lane for non-swimlane diagrams
+		if !isSwimlane {
+			node.Data.Lane = ""
+		}
+		sanitizedNodes = append(sanitizedNodes, node)
+	}
+
+	// 2. Filter orphan edges and ensure unique edge IDs
+	seenEdgeIDs := make(map[string]bool)
+	sanitizedEdges := make([]dtos.GraphEdge, 0, len(edges))
+
+	for idx, edge := range edges {
+		src := strings.TrimSpace(edge.Source)
+		tgt := strings.TrimSpace(edge.Target)
+
+		// Both source and target must exist in sanitizedNodes (Zero Orphan Edges)
+		if !seenNodeIDs[src] || !seenNodeIDs[tgt] {
+			continue // Prune orphan edge
+		}
+
+		edgeID := strings.TrimSpace(edge.ID)
+		if edgeID == "" || seenEdgeIDs[edgeID] {
+			edgeID = fmt.Sprintf("e-%s-%s-%d", src, tgt, idx)
+		}
+		seenEdgeIDs[edgeID] = true
+		edge.ID = edgeID
+
+		sanitizedEdges = append(sanitizedEdges, edge)
+	}
+
+	return sanitizedNodes, sanitizedEdges
 }
 
 type LLMStreamCallback func(delta string, totalTokens int)
@@ -707,6 +760,18 @@ func (s *AIService) CallLLMStream(
 func (s *AIService) CallLLMText(systemPrompt string, historyMessages []entities.ChatMessage, newPrompt string) (string, error) {
 	if s.provider == "openai" {
 		return s.callOpenAI(systemPrompt, historyMessages, newPrompt, nil)
+	}
+	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+}
+
+func (s *AIService) CallLLMTextStream(
+	systemPrompt string,
+	historyMessages []entities.ChatMessage,
+	newPrompt string,
+	onChunk LLMStreamCallback,
+) (string, error) {
+	if s.provider == "openai" {
+		return s.callOpenAIWithCallback(systemPrompt, historyMessages, newPrompt, nil, onChunk)
 	}
 	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
 }

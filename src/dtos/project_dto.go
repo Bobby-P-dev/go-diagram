@@ -57,11 +57,13 @@ type GraphNode struct {
 }
 
 type GraphEdge struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Label  string `json:"label,omitempty"`
-	Dashed bool   `json:"dashed,omitempty"`
+	ID           string `json:"id"`
+	Source       string `json:"source"`
+	Target       string `json:"target"`
+	SourceHandle string `json:"sourceHandle,omitempty"`
+	TargetHandle string `json:"targetHandle,omitempty"`
+	Label        string `json:"label,omitempty"`
+	Dashed       bool   `json:"dashed,omitempty"`
 }
 
 type GraphPayload struct {
