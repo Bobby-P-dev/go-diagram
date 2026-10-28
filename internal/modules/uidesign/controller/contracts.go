@@ -5,12 +5,10 @@ import (
 	"net/http"
 
 	"github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/authcontext"
-	"github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign"
 	dto "github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign/dto"
 )
 
 type UIDesignService interface {
-	GetTemplates(ctx context.Context) ([]uidesign.UITemplate, error)
 	GenerateUIDesign(ctx context.Context, req dto.CreateUIDesignRequest) (*dto.ProjectResponse, error)
 	GenerateUIDesignStream(ctx context.Context, req dto.CreateUIDesignRequest, onEvent func(eventType string, data any)) (*dto.ProjectResponse, error)
 	IterateUIDesignWithTargetedChat(ctx context.Context, projectID string, req *dto.ChatRequest) (*dto.ProjectResponse, error)

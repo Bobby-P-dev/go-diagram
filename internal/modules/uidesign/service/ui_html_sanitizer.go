@@ -1,79 +1,172 @@
 package service
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
-var (
-	disallowedScriptBlock   = regexp.MustCompile(`(?is)<\s*script\b[^>]*>.*?<\s*/\s*script\s*>`)
-	disallowedScriptTag     = regexp.MustCompile(`(?i)<\s*/?\s*script\b[^>]*>`)
-	disallowedIframeBlock   = regexp.MustCompile(`(?is)<\s*iframe\b[^>]*>.*?<\s*/\s*iframe\s*>`)
-	disallowedIframeTag     = regexp.MustCompile(`(?i)<\s*/?\s*iframe\b[^>]*>`)
-	disallowedObjectBlock   = regexp.MustCompile(`(?is)<\s*object\b[^>]*>.*?<\s*/\s*object\s*>`)
-	disallowedObjectTag     = regexp.MustCompile(`(?i)<\s*/?\s*object\b[^>]*>`)
-	disallowedEmbedTag      = regexp.MustCompile(`(?i)<\s*/?\s*embed\b[^>]*>`)
-	disallowedHeadBlock     = regexp.MustCompile(`(?is)<\s*head\b[^>]*>.*?<\s*/\s*head\s*>`)
-	disallowedDocType       = regexp.MustCompile(`(?i)<!DOCTYPE\b[^>]*>`)
-	disallowedHTMLWrapper   = regexp.MustCompile(`(?i)<\s*/?\s*(?:html|body)\b[^>]*>`)
-	disallowedEventHandler  = regexp.MustCompile(`(?i)(?:\s+)?\bon[a-zA-Z]{2,30}\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)`)
-	disallowedJavascriptURI = regexp.MustCompile(`(?i)\b(?:href|src|action)\s*=\s*["']\s*javascript:[^"']*["']`)
-	disallowedRawJavascript = regexp.MustCompile(`(?i)javascript\s*:\s*(?:void\s*\(\s*0\s*\)|;)?`)
-	disallowedSlopGradient  = regexp.MustCompile(`(?i)\bfrom-(?:purple|violet)-[56]00\s+(?:via-[a-z]+-[56]00\s+)?to-(?:indigo|purple)-[67]00\b`)
-	disallowedGlowBlob      = regexp.MustCompile(`(?is)<div\b[^>]*class="[^"]*\bblur-[23]xl\b[^"]*\bbg-(?:purple|indigo|violet|pink)-[456]00/[123]0\b[^"]*"[^>]*>\s*</div>`)
-	rigidWidthPattern       = regexp.MustCompile(`\bw-\[(?:[89]\d\d|1[0-9]\d\d)px\]`)
-)
-
-// sanitizeStaticHTML cleanses LLM-generated HTML by stripping scripts,
-// embedding tags, document wrappers, inline event handlers, and javascript: URIs.
-// It also enforces responsive layout rules (preventing rigid wide pixel boxes and
-// ensuring tables are enclosed in horizontal overflow containers for 375px mobile safety).
-func sanitizeStaticHTML(htmlStr string) string {
-	if htmlStr == "" {
-		return htmlStr
+func sanitizeStaticHTML(source string) string {
+	source = strings.TrimSpace(source)
+	for _, fence := range []string{"```html", "```HTML", "```"} {
+		if strings.HasPrefix(source, fence) {
+			source = strings.TrimPrefix(source, fence)
+			source = strings.TrimSuffix(strings.TrimSpace(source), "```")
+			break
+		}
 	}
-
-	// 0. Clean accidental markdown fences
-	htmlStr = strings.TrimSpace(htmlStr)
-	htmlStr = strings.TrimPrefix(htmlStr, "```html")
-	htmlStr = strings.TrimPrefix(htmlStr, "```HTML")
-	htmlStr = strings.TrimPrefix(htmlStr, "```")
-	htmlStr = strings.TrimSuffix(htmlStr, "```")
-	htmlStr = strings.TrimSpace(htmlStr)
-
-	// 1. Strip script, iframe, object, embed blocks and standalone tags
-	htmlStr = disallowedScriptBlock.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedScriptTag.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedIframeBlock.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedIframeTag.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedObjectBlock.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedObjectTag.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedEmbedTag.ReplaceAllString(htmlStr, "")
-
-	// 2. Strip head blocks and doctype/html/body wrappers (preserving body contents)
-	htmlStr = disallowedDocType.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedHeadBlock.ReplaceAllString(htmlStr, "")
-	htmlStr = disallowedHTMLWrapper.ReplaceAllString(htmlStr, "")
-
-	// 3. Strip inline event handlers (onsubmit, onclick, onchange, etc.)
-	htmlStr = disallowedEventHandler.ReplaceAllString(htmlStr, "")
-
-	// 4. Neutralize javascript: URIs into safe anchor '#'
-	htmlStr = disallowedJavascriptURI.ReplaceAllString(htmlStr, `href="#"`)
-	htmlStr = disallowedRawJavascript.ReplaceAllString(htmlStr, "#")
-
-	// 5. Clean AI Slop visual clichés (generic purple/indigo gradients and blurry glow orbs)
-	htmlStr = disallowedSlopGradient.ReplaceAllString(htmlStr, "from-slate-900 to-slate-950")
-	htmlStr = disallowedGlowBlob.ReplaceAllString(htmlStr, "")
-
-	// 6. Replace rigid fixed widths that break mobile viewports
-	htmlStr = rigidWidthPattern.ReplaceAllString(htmlStr, "w-full max-w-7xl mx-auto")
-
-	// 7. Responsive Table Protection: Guarantee all tables have horizontal scroll container
-	if strings.Contains(strings.ToLower(htmlStr), "<table") && !strings.Contains(strings.ToLower(htmlStr), "overflow-x-auto") && !strings.Contains(strings.ToLower(htmlStr), "overflow-auto") {
-		tableRegex := regexp.MustCompile(`(?is)(<table\b[^>]*>.*?</table>)`)
-		htmlStr = tableRegex.ReplaceAllString(htmlStr, `<div class="w-full overflow-x-auto rounded-xl border border-slate-200/80 dark:border-slate-800/80 my-2">$1</div>`)
+	var output strings.Builder
+	tokenizer := html.NewTokenizer(strings.NewReader(source))
+	blocked := ""
+	depth := 0
+	bodyWrapper := false
+	for {
+		kind := tokenizer.Next()
+		if kind == html.ErrorToken {
+			if blocked == "" {
+				output.Write(tokenizer.Raw())
+			}
+			break
+		}
+		raw := string(tokenizer.Raw())
+		token := tokenizer.Token()
+		if blocked != "" {
+			if token.Data == blocked {
+				if kind == html.StartTagToken {
+					depth++
+				} else if kind == html.EndTagToken {
+					depth--
+					if depth == 0 {
+						blocked = ""
+					}
+				}
+			}
+			continue
+		}
+		switch kind {
+		case html.DoctypeToken, html.CommentToken:
+			continue
+		case html.StartTagToken, html.SelfClosingTagToken:
+			switch token.Data {
+			case "script", "iframe", "object", "head", "template", "noscript", "foreignobject", "math", "xmp", "plaintext", "noembed", "noframes", "animate", "animatemotion", "animatetransform", "set":
+				if kind != html.SelfClosingTagToken {
+					blocked, depth = token.Data, 1
+				}
+				continue
+			case "embed", "base", "meta", "link":
+				continue
+			case "html":
+				continue
+			}
+			changed := sanitizeHTMLAttributes(&token)
+			if token.Data == "body" {
+				if len(token.Attr) == 0 {
+					continue
+				}
+				token.Data = "div"
+				token.DataAtom = 0
+				bodyWrapper = true
+				changed = true
+			}
+			if changed {
+				output.WriteString(token.String())
+			} else {
+				output.WriteString(raw)
+			}
+		case html.EndTagToken:
+			switch token.Data {
+			case "html", "head", "script", "iframe", "object", "embed", "template", "noscript", "foreignobject", "math", "xmp", "plaintext", "noembed", "noframes", "animate", "animatemotion", "animatetransform", "set", "base", "meta", "link":
+				continue
+			case "body":
+				if bodyWrapper {
+					output.WriteString("</div>")
+					bodyWrapper = false
+				}
+				continue
+			}
+			output.WriteString(raw)
+		default:
+			output.WriteString(raw)
+		}
 	}
+	return strings.TrimSpace(output.String())
+}
 
-	return strings.TrimSpace(htmlStr)
+func sanitizeHTMLAttributes(token *html.Token) bool {
+	changed := false
+	attributes := make([]html.Attribute, 0, len(token.Attr))
+	for _, attribute := range token.Attr {
+		key := strings.ToLower(attribute.Key)
+		if strings.HasPrefix(key, "on") || strings.HasPrefix(key, "v-") || strings.HasPrefix(key, "@") || strings.HasPrefix(key, ":") || key == "srcdoc" || key == "is" {
+			changed = true
+			continue
+		}
+		switch key {
+		case "href", "src", "xlink:href", "action", "formaction", "poster", "background", "cite", "data":
+			if !safeStaticURL(attribute.Val) {
+				attribute.Val = "#"
+				changed = true
+			}
+		case "srcset", "imagesrcset":
+			for _, candidate := range strings.Split(attribute.Val, ",") {
+				parts := strings.Fields(candidate)
+				if len(parts) > 0 && !safeStaticURL(parts[0]) {
+					attribute.Val = ""
+					changed = true
+					break
+				}
+			}
+		}
+		attributes = append(attributes, attribute)
+	}
+	token.Attr = attributes
+	return changed
+}
+
+func safeStaticURL(value string) bool {
+	value = strings.Map(func(character rune) rune {
+		if character <= 0x20 || character == 0x7f {
+			return -1
+		}
+		return character
+	}, value)
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "", "https", "http", "mailto", "tel":
+		return true
+	default:
+		return false
+	}
+}
+
+func replaceTextContentOnly(source string, pattern *regexp.Regexp, replacement string) string {
+	if pattern == nil {
+		return source
+	}
+	tokenizer := html.NewTokenizer(strings.NewReader(source))
+	var output strings.Builder
+	inStyle := false
+	for {
+		kind := tokenizer.Next()
+		if kind == html.ErrorToken {
+			output.Write(tokenizer.Raw())
+			break
+		}
+		raw := string(tokenizer.Raw())
+		token := tokenizer.Token()
+		if kind == html.StartTagToken && token.Data == "style" {
+			inStyle = true
+		} else if kind == html.EndTagToken && token.Data == "style" {
+			inStyle = false
+		} else if kind == html.TextToken && !inStyle {
+			raw = pattern.ReplaceAllString(raw, replacement)
+		}
+		output.WriteString(raw)
+	}
+	return output.String()
 }

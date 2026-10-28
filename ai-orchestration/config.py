@@ -27,9 +27,9 @@ class Settings(BaseModel):
     ai_provider: str = os.getenv("AI_PROVIDER", "openai").lower()
     
     # OpenAI & Compatible (9router / OpenRouter / Local) Configuration
-    openai_api_key: str = get_env_any(["OPEN_AI_API_KEY", "OPENAI_API_KEY", "AI_API_KEY"])
-    openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "cx/gpt-6-luna")
-    openai_base_url: str = get_env_any(["OPEN_AI_BASE_URL", "OPENAI_BASE_URL", "AI_BASE_URL"], "http://localhost:20128/v1")
+    openai_api_key: str = get_env_any(["OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY", "MODEL_API_KEY", "META_API_KEY"])
+    openai_model: str = get_env_any(["OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL", "META_MODEL"], "cx/gpt-6-luna")
+    openai_base_url: str = get_env_any(["OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL", "META_BASE_URL"], "http://localhost:20128/v1")
 
 settings = Settings()
 

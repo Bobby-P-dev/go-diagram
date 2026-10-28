@@ -2,21 +2,17 @@ package controller_test
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign"
 	uidesigncontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign/controller"
 	dto "github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign/dto"
 	"github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign/service"
 )
 
 type fakeUIDesignService struct {
-	templates      []uidesign.UITemplate
-	templatesErr   error
 	genResult      *dto.ProjectResponse
 	genErr         error
 	streamEvents   []string
@@ -24,17 +20,6 @@ type fakeUIDesignService struct {
 	chatResult     *dto.ProjectResponse
 	chatErr        error
 	lastChatPrompt string
-}
-
-func (s *fakeUIDesignService) GetTemplates(ctx context.Context) ([]uidesign.UITemplate, error) {
-	if s.templatesErr != nil {
-		return nil, s.templatesErr
-	}
-	return s.templates, nil
-}
-
-func (s *fakeUIDesignService) CreateProjectFromTemplate(ctx context.Context, templateID string) (*dto.ProjectResponse, error) {
-	return nil, nil
 }
 
 func (s *fakeUIDesignService) GenerateUIDesign(ctx context.Context, req dto.CreateUIDesignRequest) (*dto.ProjectResponse, error) {
@@ -68,34 +53,6 @@ func (s *fakeUIDesignService) IterateUIDesignWithTargetedChat(ctx context.Contex
 	return s.chatResult, nil
 }
 
-func TestUIDesignController_GetTemplates(t *testing.T) {
-	svc := &fakeUIDesignService{
-		templates: []uidesign.UITemplate{
-			{ID: "tmpl-1", Name: "SaaS Landing"},
-		},
-	}
-	ctrl := uidesigncontroller.NewUIDesignController(svc)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/ui-design/templates", nil)
-	rec := httptest.NewRecorder()
-	ctrl.GetTemplates(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "SaaS Landing") {
-		t.Fatalf("expected template in body: %s", rec.Body.String())
-	}
-
-	// Error case
-	svc.templatesErr = errors.New("db error")
-	rec = httptest.NewRecorder()
-	ctrl.GetTemplates(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("expected 500, got %d", rec.Code)
-	}
-}
-
 func TestUIDesignController_Create(t *testing.T) {
 	svc := &fakeUIDesignService{
 		genResult: &dto.ProjectResponse{ID: "proj-123"},
@@ -115,6 +72,21 @@ func TestUIDesignController_Create(t *testing.T) {
 	ctrl.Create(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+
+	// 1b. Bad request when template_id is passed without prompt
+	userReader = func(ctx context.Context) *uidesigncontroller.AuthenticatedUser {
+		return &uidesigncontroller.AuthenticatedUser{
+			ID:            "user-1",
+			CanGenerateUI: true,
+		}
+	}
+	ctrl = uidesigncontroller.NewUIDesignControllerWithUserReader(svc, userReader)
+	req = httptest.NewRequest(http.MethodPost, "/api/ui-design/generate", strings.NewReader(`{"template_id":"tpl-1"}`))
+	rec = httptest.NewRecorder()
+	ctrl.Create(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for template_id without prompt, got %d", rec.Code)
 	}
 
 	// 2. Invalid JSON payload

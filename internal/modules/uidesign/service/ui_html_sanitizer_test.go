@@ -57,14 +57,14 @@ func TestSanitizeStaticHTML(t *testing.T) {
 			expected: `<div data-rl-id="sec-1">Clean</div>`,
 		},
 		{
-			name:     "Neutralizes generic AI purple-indigo gradient",
+			name:     "Preserves generated gradient classes",
 			input:    `<div class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white" data-rl-id="sec-1">Header</div>`,
-			expected: `<div class="bg-gradient-to-r from-slate-900 to-slate-950 text-white" data-rl-id="sec-1">Header</div>`,
+			expected: `<div class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white" data-rl-id="sec-1">Header</div>`,
 		},
 		{
-			name:     "Strips decorative blurred glow orb blob",
+			name:     "Preserves decorative containers",
 			input:    `<div class="relative"><div class="absolute -top-10 -right-10 w-72 h-72 blur-3xl bg-purple-500/20 rounded-full"></div><span data-rl-id="sec-1">Real Content</span></div>`,
-			expected: `<div class="relative"><span data-rl-id="sec-1">Real Content</span></div>`,
+			expected: `<div class="relative"><div class="absolute -top-10 -right-10 w-72 h-72 blur-3xl bg-purple-500/20 rounded-full"></div><span data-rl-id="sec-1">Real Content</span></div>`,
 		},
 	}
 

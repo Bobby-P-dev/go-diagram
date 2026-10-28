@@ -49,6 +49,11 @@ func (c *AsyncJobController) CreateAsyncUIDesign(w http.ResponseWriter, r *http.
 		return
 	}
 
+	if err := req.ValidateGenerationMode(); err != nil {
+		httpresponse.RespondError(w, http.StatusBadRequest, "Unsupported UI generation mode", err.Error())
+		return
+	}
+
 	if c.dispatcher == nil {
 		httpresponse.RespondError(w, http.StatusInternalServerError, "Failed to dispatch async job", "job dispatcher unavailable")
 		return

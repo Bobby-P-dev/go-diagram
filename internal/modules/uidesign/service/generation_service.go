@@ -19,8 +19,8 @@ func (s *uiDesignService) GenerateUIDesignStream(
 	req dtos.CreateUIDesignRequest,
 	onEvent func(eventType string, data any),
 ) (*dtos.ProjectResponse, error) {
-	if req.TemplateID != "" {
-		return s.CreateProjectFromTemplate(ctx, req.TemplateID)
+	if err := req.ValidateGenerationMode(); err != nil {
+		return nil, err
 	}
 
 	device := strings.ToLower(strings.TrimSpace(req.Device))

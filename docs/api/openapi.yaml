@@ -622,10 +622,12 @@ paths:
     get:
       tags: [UI Design]
       operationId: listUITemplates
-      summary: List UI design templates
+      summary: Return an empty legacy UI template list
+      deprecated: true
+      description: Compatibility endpoint; static UI templates are no longer available. Always returns an empty data array.
       responses:
         '200':
-          description: UI template list
+          description: Empty UI template list
           content:
             application/json:
               schema:
@@ -635,6 +637,7 @@ paths:
                     properties:
                       data:
                         type: array
+                        maxItems: 0
                         items:
                           $ref: '#/components/schemas/UITemplate'
         '401':
@@ -1657,6 +1660,9 @@ components:
           type: string
         template_id:
           type: string
+          deprecated: true
+          maxLength: 0
+          description: Only an empty value is accepted. Nonempty template IDs return HTTP 400 for sync, streaming, and async generation; use prompt instead.
     AsyncJobInitResponse:
       type: object
       required: [job_id, project_id, status, correlation_id, message]

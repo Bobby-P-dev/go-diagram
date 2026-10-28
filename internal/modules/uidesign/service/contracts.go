@@ -7,11 +7,6 @@ import (
 	dto "github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign/dto"
 )
 
-type TemplateRepository interface {
-	GetAllUITemplates(ctx context.Context) ([]uidesign.UITemplate, error)
-	GetUITemplateByID(ctx context.Context, id string) (*uidesign.UITemplate, error)
-}
-
 type JobBindingRepository interface {
 	Create(ctx context.Context, binding uidesign.AsyncJobBinding) error
 	GetByID(ctx context.Context, jobID string) (*uidesign.AsyncJobBinding, error)

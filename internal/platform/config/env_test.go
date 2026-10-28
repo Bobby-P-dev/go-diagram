@@ -12,14 +12,14 @@ func TestLoadEnvSecretsHaveNoFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Chdir(workingDirectory)
-	for _, name := range []string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY", "INTERNAL_SERVICE_KEY", "MASTER_ADMIN_KEY", "ANTHROPIC_API_KEY"} {
+	for _, name := range []string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY", "MODEL_API_KEY", "META_API_KEY", "INTERNAL_SERVICE_KEY", "MASTER_ADMIN_KEY", "ANTHROPIC_API_KEY"} {
 		t.Setenv(name, "")
 	}
 	env := LoadEnv()
 	if env.OpenAIAPIKey != "" || env.InternalServiceKey != "" || env.MasterAdminKey != "" || env.AnthropicAPIKey != "" {
 		t.Fatal("secrets must remain empty when not supplied")
 	}
-	for _, alias := range []string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY"} {
+	for _, alias := range []string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY", "MODEL_API_KEY", "META_API_KEY"} {
 		t.Run(alias, func(t *testing.T) {
 			t.Setenv(alias, "test-provider-value")
 			env := LoadEnv()
@@ -84,5 +84,39 @@ func TestEnvConfigValidate(t *testing.T) {
 				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestLoadEnvMetaConfigurationAndPrecedence(t *testing.T) {
+	workingDirectory := filepath.Join(t.TempDir(), "workspace", "config")
+	if err := os.MkdirAll(workingDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workingDirectory)
+	for _, name := range []string{
+		"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY", "MODEL_API_KEY", "META_API_KEY",
+		"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL", "META_MODEL",
+		"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL", "META_BASE_URL",
+	} {
+		t.Setenv(name, "")
+	}
+	t.Setenv("AI_PROVIDER", "openai")
+	t.Setenv("INTERNAL_SERVICE_KEY", "mock-internal-key")
+	t.Setenv("MODEL_API_KEY", "mock-meta-key")
+	t.Setenv("OPEN_AI_MODEL", "muse-spark-1.3")
+	t.Setenv("OPEN_AI_BASE_URL", "https://api.meta.ai/v1")
+	env := LoadEnv()
+	if env.OpenAIAPIKey != "mock-meta-key" || env.OpenAIModel != "muse-spark-1.3" || env.OpenAIMBaseURL != "https://api.meta.ai/v1" {
+		t.Fatal("Meta configuration was not resolved")
+	}
+	if err := env.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OPENAI_API_KEY", "mock-legacy-key")
+	t.Setenv("OPENAI_MODEL", "legacy-model")
+	t.Setenv("OPENAI_BASE_URL", "https://legacy.invalid/v1")
+	env = LoadEnv()
+	if env.OpenAIAPIKey != "mock-legacy-key" || env.OpenAIModel != "legacy-model" || env.OpenAIMBaseURL != "https://legacy.invalid/v1" {
+		t.Fatal("existing OpenAI aliases must take precedence")
 	}
 }

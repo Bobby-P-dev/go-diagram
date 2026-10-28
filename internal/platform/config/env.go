@@ -55,9 +55,9 @@ func LoadEnv() *EnvConfig {
 		AnthropicModel:          getEnv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
 		AnthropicBaseURL:        getEnv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1/messages"),
 		CORSAllowedOrigins:      getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
-		OpenAIAPIKey:            getEnvAny([]string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY"}, ""),
-		OpenAIMBaseURL:          getEnvAny([]string{"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL"}, "http://localhost:20128/v1"),
-		OpenAIModel:             getEnvAny([]string{"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL"}, "cx/gpt-6-luna"),
+		OpenAIAPIKey:            getEnvAny([]string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY", "MODEL_API_KEY", "META_API_KEY"}, ""),
+		OpenAIMBaseURL:          getEnvAny([]string{"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL", "META_BASE_URL"}, "http://localhost:20128/v1"),
+		OpenAIModel:             getEnvAny([]string{"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL", "META_MODEL"}, "cx/gpt-6-luna"),
 		AIMaxTokens:             getEnvInt("AI_MAX_TOKENS", 8192),
 		RedisURL:                getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		InternalServiceKey:      getEnv("INTERNAL_SERVICE_KEY", ""),
@@ -86,7 +86,7 @@ func (env *EnvConfig) Validate() error {
 	switch strings.ToLower(strings.TrimSpace(env.AIProvider)) {
 	case "openai":
 		if strings.TrimSpace(env.OpenAIAPIKey) == "" {
-			return fmt.Errorf("OPENAI_API_KEY, OPEN_AI_API_KEY, or AI_API_KEY is required for AI_PROVIDER=openai")
+			return fmt.Errorf("OPENAI_API_KEY, OPEN_AI_API_KEY, AI_API_KEY, or MODEL_API_KEY is required for AI_PROVIDER=openai")
 		}
 	case "anthropic":
 		if strings.TrimSpace(env.AnthropicAPIKey) == "" {

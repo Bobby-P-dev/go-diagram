@@ -170,11 +170,7 @@ func (p *PatchEngine) ApplyPatch(
 			patchedFrame.CodeExport["vue"] = "<template>\n" + currentHTML + "\n</template>\n"
 		}
 	} else if len(patchedFrame.Sections) > 0 {
-		// Only fall back to generateVueCodeExport if no previous HTML existed
-		patchedFrame.CodeExport = generateVueCodeExport(patchedFrame.Title, patchedFrame.Sections, themeMode, accentColor)
-		if patchedFrame.CodeExport != nil {
-			patchedFrame.RawHtml = patchedFrame.CodeExport["html"]
-		}
+		return nil, "", fmt.Errorf("cannot patch a section-only UI frame without generated HTML; regenerate the design from a prompt")
 	}
 
 	// Synchronize canonical design state and implementation

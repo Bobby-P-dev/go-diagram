@@ -1,7 +1,5 @@
 package dto
 
-import "encoding/json"
-
 // Canonical Requirement Item with ID
 type StructuredRequirementItemDTO struct {
 	ID          string  `json:"id"`
@@ -452,18 +450,6 @@ func (f *UIFrameData) SyncCanonical(posX, posY float64) {
 			VisualReview:        &AuditEvaluationDTO{Status: "not_evaluated"},
 		}
 	}
-}
-
-type UIDesignTemplateDTO struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Category    string          `json:"category"`
-	Device      string          `json:"device"`
-	Description string          `json:"description"`
-	Theme       json.RawMessage `json:"theme"`
-	Sections    json.RawMessage `json:"sections"`
-	CodeExport  json.RawMessage `json:"code_export"`
-	IsFeatured  bool            `json:"is_featured"`
 }
 
 type CreativeDirectionItemDTO struct {

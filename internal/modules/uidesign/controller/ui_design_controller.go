@@ -30,17 +30,7 @@ func NewUIDesignControllerWithUserReader(service UIDesignService, userReader Use
 }
 
 func (c *UIDesignController) GetTemplates(w http.ResponseWriter, r *http.Request) {
-	if c.service == nil {
-		httpresponse.RespondError(w, http.StatusInternalServerError, "Failed to fetch UI templates", "service unavailable")
-		return
-	}
-	templates, err := c.service.GetTemplates(r.Context())
-	if err != nil {
-		log.Printf("[UIDesignController.GetTemplates] Error: %v", err)
-		httpresponse.RespondError(w, http.StatusInternalServerError, "Failed to fetch UI templates", err.Error())
-		return
-	}
-	httpresponse.RespondJSON(w, http.StatusOK, "UI templates retrieved successfully", templates)
+	httpresponse.RespondJSON(w, http.StatusOK, "Static UI templates are no longer available", []struct{}{})
 }
 
 func (c *UIDesignController) Create(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +47,11 @@ func (c *UIDesignController) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
+
+	if err := req.ValidateGenerationMode(); err != nil {
+		httpresponse.RespondError(w, http.StatusBadRequest, "Unsupported UI generation mode", err.Error())
+		return
+	}
 
 	if c.service == nil {
 		httpresponse.RespondError(w, http.StatusInternalServerError, "Failed to generate UI design", "service unavailable")
@@ -87,6 +82,11 @@ func (c *UIDesignController) CreateStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 	defer r.Body.Close()
+
+	if err := req.ValidateGenerationMode(); err != nil {
+		httpresponse.RespondError(w, http.StatusBadRequest, "Unsupported UI generation mode", err.Error())
+		return
+	}
 
 	if c.service == nil {
 		httpresponse.RespondError(w, http.StatusInternalServerError, "Failed to generate UI design", "service unavailable")

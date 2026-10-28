@@ -85,6 +85,9 @@ func (dispatcher *JobDispatcherService) DispatchUIDesignJob(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := req.ValidateGenerationMode(); err != nil {
+		return nil, err
+	}
 	userID = strings.TrimSpace(userID)
 	if userID == "" {
 		return nil, fmt.Errorf("an authenticated user is required to dispatch a UI design job")

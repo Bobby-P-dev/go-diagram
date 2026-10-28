@@ -7,8 +7,6 @@ import (
 )
 
 type UIDesignServiceInterface interface {
-	GetTemplates(ctx context.Context) ([]uidesign.UITemplate, error)
-	CreateProjectFromTemplate(ctx context.Context, templateID string) (*dtos.ProjectResponse, error)
 	GenerateUIDesign(ctx context.Context, req dtos.CreateUIDesignRequest) (*dtos.ProjectResponse, error)
 	GenerateUIDesignStream(ctx context.Context, req dtos.CreateUIDesignRequest, onEvent func(eventType string, data any)) (*dtos.ProjectResponse, error)
 	IterateUIDesignWithChat(ctx context.Context, projectID, prompt string, targetedNodeIDs []string) (*dtos.ProjectResponse, error)
@@ -17,7 +15,6 @@ type UIDesignServiceInterface interface {
 
 type uiDesignService struct {
 	projects        uidesign.ProjectGateway
-	uiTemplateModel TemplateRepository
 	aiService       LLMClient
 	compiler        *UIDesignCompiler
 	changeAnalyzer  *ChangeAnalyzer
@@ -26,12 +23,12 @@ type uiDesignService struct {
 	userID          UserIDReader
 }
 
-func NewUIDesignService(projects uidesign.ProjectGateway, templates TemplateRepository, ai LLMClient, userID UserIDReader) UIDesignServiceInterface {
+func NewUIDesignService(projects uidesign.ProjectGateway, ai LLMClient, userID UserIDReader) UIDesignServiceInterface {
 	if userID == nil {
 		userID = func(context.Context) string { return "" }
 	}
 	return &uiDesignService{
-		projects: projects, uiTemplateModel: templates, aiService: ai,
+		projects: projects, aiService: ai,
 		compiler: NewUIDesignCompiler(ai), changeAnalyzer: NewChangeAnalyzer(ai),
 		patchEngine: NewPatchEngine(), targetedPatcher: NewTargetedPatcher(ai), userID: userID,
 	}

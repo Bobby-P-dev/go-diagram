@@ -2,6 +2,8 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"strings"
 
 	dtos "github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign/dto"
@@ -115,7 +117,8 @@ func (v *UIValidator) ValidateAndAudit(
 		hasHallucination := false
 		if !isDomainSpecified {
 			for _, kw := range hallucinatedDomainKeywords {
-				if strings.Contains(secStr, kw) && !isExplicitlyRequested(kw) {
+				kwPattern := regexp.MustCompile(fmt.Sprintf(`(?i)\b%s\b`, regexp.QuoteMeta(kw)))
+				if kwPattern.MatchString(secStr) && !isExplicitlyRequested(kw) {
 					hasHallucination = true
 					issues = append(issues, "Detected and stripped unrequested domain feature: '"+kw+"' in section '"+sec.Type+"'")
 					strippedSections = append(strippedSections, sec.ID+": "+kw)

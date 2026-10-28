@@ -119,29 +119,6 @@ func (g *inMemoryProjectGateway) AppendMessage(ctx context.Context, projectID, r
 	return &msg, nil
 }
 
-type fakeTemplateRepo struct {
-	templates []uidesign.UITemplate
-}
-
-func (r *fakeTemplateRepo) GetAllUITemplates(ctx context.Context) ([]uidesign.UITemplate, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return r.templates, nil
-}
-
-func (r *fakeTemplateRepo) GetUITemplateByID(ctx context.Context, id string) (*uidesign.UITemplate, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	for _, tpl := range r.templates {
-		if tpl.ID == id {
-			return &tpl, nil
-		}
-	}
-	return nil, errors.New("ui template not found")
-}
-
 type fakeAIClient struct {
 	response string
 }
@@ -162,72 +139,9 @@ func (c *fakeAIClient) SanitizeJSON(raw string) string {
 	return raw
 }
 
-func TestUIDesignService_GetTemplates(t *testing.T) {
-	repo := &fakeTemplateRepo{
-		templates: []uidesign.UITemplate{
-			{ID: "tpl-1", Name: "Admin Dashboard"},
-		},
-	}
-	gw := newInMemoryProjectGateway()
-	svc := uidesignservice.NewUIDesignService(gw, repo, nil, nil)
-
-	t.Run("Context canceled", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		if _, err := svc.GetTemplates(ctx); !errors.Is(err, context.Canceled) {
-			t.Fatalf("expected context.Canceled, got %v", err)
-		}
-	})
-
-	t.Run("Success", func(t *testing.T) {
-		tpls, err := svc.GetTemplates(context.Background())
-		if err != nil || len(tpls) != 1 {
-			t.Fatalf("expected 1 template, got %v, len %d", err, len(tpls))
-		}
-	})
-}
-
-func TestUIDesignService_CreateProjectFromTemplate(t *testing.T) {
-	repo := &fakeTemplateRepo{
-		templates: []uidesign.UITemplate{
-			{
-				ID:         "tpl-1",
-				Name:       "Mobile App",
-				Device:     "mobile",
-				Theme:      json.RawMessage(`{"accent":"#10b981"}`),
-				Sections:   json.RawMessage(`[]`),
-				CodeExport: json.RawMessage(`{}`),
-			},
-		},
-	}
-	gw := newInMemoryProjectGateway()
-	userReader := func(ctx context.Context) string { return "user-123" }
-	svc := uidesignservice.NewUIDesignService(gw, repo, nil, userReader)
-
-	resp, err := svc.CreateProjectFromTemplate(context.Background(), "tpl-1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if resp.ID != "proj-1" || resp.Title != "Mobile App" {
-		t.Fatalf("unexpected project response: %+v", resp)
-	}
-
-	// Verify project recorded in gateway
-	p := gw.projects["proj-1"]
-	if p == nil || p.UserID != "user-123" {
-		t.Fatalf("expected project with user-123, got %+v", p)
-	}
-	if gw.versions["proj-1"] != 1 {
-		t.Fatalf("expected version 1, got %d", gw.versions["proj-1"])
-	}
-	if len(gw.messages["proj-1"]) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(gw.messages["proj-1"]))
-	}
-}
-
 func TestUIDesignService_GenerateUIDesign_BlankCanvas(t *testing.T) {
 	gw := newInMemoryProjectGateway()
-	svc := uidesignservice.NewUIDesignService(gw, nil, nil, func(ctx context.Context) string { return "user-123" })
+	svc := uidesignservice.NewUIDesignService(gw, nil, func(ctx context.Context) string { return "user-123" })
 
 	events := make([]string, 0)
 	resp, err := svc.GenerateUIDesignStream(context.Background(), dtos.CreateUIDesignRequest{

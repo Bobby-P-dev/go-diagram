@@ -39,7 +39,6 @@ func NewHandler(env *platformconfig.EnvConfig, db *sql.DB, redisClient *redis.Cl
 	versionModel := diagramrepository.NewVersionRepository(db)
 	usageRecorder := aiusage.NewPostgresRepository(db)
 	templateModel := diagramrepository.NewTemplateRepository(db)
-	uiTemplateRepository := uidesignrepository.NewPostgresTemplateRepository(db)
 
 	commentRepository := workspacerepository.NewCommentRepository(db)
 	foundationRepository := workspacerepository.NewFoundationRepository(db)
@@ -85,7 +84,6 @@ func NewHandler(env *platformconfig.EnvConfig, db *sql.DB, redisClient *redis.Cl
 	uiDesignProjects := projectgateway.NewUIDesignProjectGateway(projectModel, messageModel, versionModel)
 	uiDesignService := uidesignservice.NewUIDesignService(
 		uiDesignProjects,
-		uiTemplateRepository,
 		uidesignintegration.NewUIDesignAIClient(llmClient),
 		func(ctx context.Context) string {
 			if user := authcontext.UserFromContext(ctx); user != nil {
