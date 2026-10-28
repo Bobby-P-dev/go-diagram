@@ -5,7 +5,9 @@ from config import settings
 
 def get_llm(max_tokens: int = 8192, reasoning_effort: Optional[str] = None) -> LLM:
     """Configures the primary LLM for agents using OpenAI / OpenAI-compatible endpoint."""
-    api_key = settings.openai_api_key or "sk-27534e0917d892bb-z0aum1-3e0637a7"
+    api_key = settings.openai_api_key
+    if not api_key.strip():
+        raise ValueError("An OpenAI-compatible API key is required")
     base_url = settings.openai_base_url or "http://localhost:20128/v1"
     model = settings.openai_model or "cx/gpt-6-luna"
     

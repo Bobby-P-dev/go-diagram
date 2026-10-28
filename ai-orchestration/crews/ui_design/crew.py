@@ -243,9 +243,11 @@ def ensure_code_export(frame_data: UIFrameData, design_system: Optional[Dict[str
 class UIDesignStudioCrew:
     def __init__(self, custom_llm: Optional[Any] = None):
         self.custom_llm = custom_llm
+        if not settings.openai_api_key.strip():
+            raise ValueError("An OpenAI-compatible API key is required")
         self.client = OpenAI(
             base_url=settings.openai_base_url or "http://localhost:20128/v1",
-            api_key=settings.openai_api_key or "sk-27534e0917d892bb-z0aum1-3e0637a7",
+            api_key=settings.openai_api_key,
             timeout=60.0,
             max_retries=1,
         )

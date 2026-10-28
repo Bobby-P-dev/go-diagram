@@ -20,14 +20,14 @@ def get_env_any(keys: List[str], default: str = "") -> str:
 class Settings(BaseModel):
     app_port: int = int(os.getenv("ORCHESTRATION_PORT", "8000"))
     redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    internal_service_key: str = os.getenv("INTERNAL_SERVICE_KEY", "secret-internal-key-project-diagram")
+    internal_service_key: str = os.getenv("INTERNAL_SERVICE_KEY", "")
     go_backend_url: str = os.getenv("GO_BACKEND_URL", "http://localhost:8080")
     
     # AI Provider: Default strictly to OpenAI
     ai_provider: str = os.getenv("AI_PROVIDER", "openai").lower()
     
     # OpenAI & Compatible (9router / OpenRouter / Local) Configuration
-    openai_api_key: str = get_env_any(["OPEN_AI_API_KEY", "OPENAI_API_KEY", "AI_API_KEY"], "sk-27534e0917d892bb-z0aum1-3e0637a7")
+    openai_api_key: str = get_env_any(["OPEN_AI_API_KEY", "OPENAI_API_KEY", "AI_API_KEY"])
     openai_model: str = get_env_any(["OPEN_AI_MODEL", "OPENAI_MODEL", "AI_MODEL"], "cx/gpt-6-luna")
     openai_base_url: str = get_env_any(["OPEN_AI_BASE_URL", "OPENAI_BASE_URL", "AI_BASE_URL"], "http://localhost:20128/v1")
 

@@ -9,94 +9,56 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Bobby-P-dev/go-diagram.git/src/config"
-	"github.com/Bobby-P-dev/go-diagram.git/src/controllers"
-	"github.com/Bobby-P-dev/go-diagram.git/src/middlewares"
-	"github.com/Bobby-P-dev/go-diagram.git/src/models"
-	"github.com/Bobby-P-dev/go-diagram.git/src/routes"
-	"github.com/Bobby-P-dev/go-diagram.git/src/services"
+	"github.com/Bobby-P-dev/go-diagram.git/internal/app"
+	identityrepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/repository"
+	identityservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/service"
+	platformconfig "github.com/Bobby-P-dev/go-diagram.git/internal/platform/config"
+	platformdatabase "github.com/Bobby-P-dev/go-diagram.git/internal/platform/database"
+	platformredis "github.com/Bobby-P-dev/go-diagram.git/internal/platform/redis"
 )
 
 func main() {
-	config.LoadEnv()
-	config.ConnectDatabase()
-	defer config.CloseDatabase()
+	env := platformconfig.LoadEnv()
+	if err := env.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
 
-	config.ConnectRedis()
-	defer config.CloseRedis()
+	db, err := platformdatabase.Connect(context.Background(), platformdatabase.Config{
+		Host:     env.DBHost,
+		Port:     env.DBPort,
+		User:     env.DBUser,
+		Password: env.DBPassword,
+		DBName:   env.DBName,
+		SSLMode:  env.DBSSLMode,
+	})
+	if err != nil {
+		log.Fatalf("Failed to open database connection: %v", err)
+	}
+	defer platformdatabase.Close(db)
 
-	projectModel := models.NewProjectModel(config.DB)
-	messageModel := models.NewMessageModel(config.DB)
-	versionModel := models.NewVersionModel(config.DB)
-	logModel := models.NewLogModel(config.DB)
-	templateModel := models.NewTemplateModel(config.DB)
-	uiTemplateModel := models.NewUITemplateModel(config.DB)
+	if err := platformdatabase.RunMigrations(context.Background(), db); err != nil {
+		log.Printf("Warning during automatic database migration: %v", err)
+	}
 
-	commentModel := models.NewCommentModel(config.DB)
-	foundationModel := models.NewFoundationModel(config.DB)
-	settingsModel := models.NewSettingsModel(config.DB)
-	exportModel := models.NewExportModel(config.DB)
-	shareModel := models.NewShareModel(config.DB)
-	credentialModel := models.NewCredentialModel(config.DB)
-	_ = credentialModel.EnsureMasterAdmin(models.DefaultMasterAdminKey)
+	redisClient, err := platformredis.Connect(context.Background(), env.RedisURL)
+	if err != nil {
+		log.Printf("Warning: Redis connection failed: %v. Background queue will operate in direct fallback mode.", err)
+	} else {
+		defer platformredis.Close(redisClient)
+	}
 
-	aiService := services.NewAIService()
-	projectService := services.NewProjectService(
-		aiService,
-		projectModel,
-		messageModel,
-		versionModel,
-		logModel,
-		templateModel,
-	)
-	projectController := controllers.NewProjectController(projectService)
-	shareController := controllers.NewShareController(shareModel, projectModel, projectService)
-	authController := controllers.NewAuthController(credentialModel)
-	adminController := controllers.NewAdminController(credentialModel)
+	credentialService := identityservice.NewCredentialService(identityrepository.NewPostgresRepository(db))
+	if err := credentialService.MigrateCredentialKeys(context.Background()); err != nil {
+		log.Fatalf("Credential key migration failed: %v", err)
+	}
+	if err := credentialService.EnsureMasterAdmin(context.Background(), env.MasterAdminKey); err != nil {
+		log.Fatalf("Master admin bootstrap failed: %v", err)
+	}
 
-	uiDesignService := services.NewUIDesignService(
-		projectModel,
-		messageModel,
-		versionModel,
-		uiTemplateModel,
-		aiService,
-	)
-	uiDesignController := controllers.NewUIDesignController(uiDesignService)
-
-	workspaceController := controllers.NewWorkspaceController(
-		commentModel,
-		foundationModel,
-		settingsModel,
-		exportModel,
-	)
-
-	jobDispatcherService := services.NewJobDispatcherService(
-		projectModel,
-		messageModel,
-		versionModel,
-		logModel,
-	)
-	asyncJobController := controllers.NewAsyncJobController(jobDispatcherService, projectService)
-
-	mux := http.NewServeMux()
-	routes.RegisterRoutes(
-		mux,
-		projectController,
-		uiDesignController,
-		workspaceController,
-		asyncJobController,
-		shareController,
-		authController,
-		adminController,
-	)
-
-	var handler http.Handler = mux
-	handler = middlewares.AuthMiddleware(credentialModel)(handler)
-	handler = middlewares.LoggerMiddleware(handler)
-	handler = middlewares.CORSMiddleware(handler)
+	handler := app.NewHandler(env, db, redisClient, credentialService)
 
 	server := &http.Server{
-		Addr:         ":" + config.Env.AppPort,
+		Addr:         ":" + env.AppPort,
 		Handler:      handler,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 300 * time.Second,
@@ -104,7 +66,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("Server starting on port %s", config.Env.AppPort)
+		log.Printf("Server starting on port %s", env.AppPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed to start: %v", err)
 		}

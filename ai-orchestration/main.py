@@ -59,7 +59,7 @@ def trigger_ui_design_crew(
     x_internal_service_key: str = Header(None),
 ):
     """Triggers the UI Design Studio Crew asynchronously via direct HTTP."""
-    if x_internal_service_key != settings.internal_service_key:
+    if not settings.internal_service_key.strip() or x_internal_service_key != settings.internal_service_key:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized: Invalid or missing X-Internal-Service-Key",

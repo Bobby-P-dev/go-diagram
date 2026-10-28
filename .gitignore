@@ -3,6 +3,28 @@
 .env.*
 !.env.example
 
+# Local AI smoke test contains a hardcoded credential; never publish it.
+/test_ai.py
+
+# Private credentials and certificate bundles
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Local database dumps and backups (keep SQL migrations versioned)
+/backups/
+/dumps/
+*.dump
+*.sql.gz
+*.sql.bz2
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+
 # Compiled binaries and executables
 server
 diagram-backend
@@ -55,7 +77,11 @@ __pycache__/
 .installed.cfg
 *.egg
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tox/
 .coverage
+.coverage.*
 htmlcov/
 
 # Sidecar local caches & storage

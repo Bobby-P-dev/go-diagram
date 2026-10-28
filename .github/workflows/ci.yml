@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUN_LIVE_AI_TESTS: '0'
+
+jobs:
+  verify:
+    name: Verify & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyYAML
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Lint & Verify OpenAPI Specification
+        run: make lint-spec
+
+      - name: Run Go Vet & Offline Tests
+        run: make verify
+
+      - name: Run Race Detector on Critical Paths
+        run: make test-race

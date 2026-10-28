@@ -49,6 +49,7 @@ services:
       - REDIS_URL=${REDIS_URL}
 
       - INTERNAL_SERVICE_KEY=${INTERNAL_SERVICE_KEY}
+      - MASTER_ADMIN_KEY=${MASTER_ADMIN_KEY:-}
       - ORCHESTRATION_SERVICE_URL=http://ai-orchestration:8000
 
       - AI_PROVIDER=${AI_PROVIDER:-openai}

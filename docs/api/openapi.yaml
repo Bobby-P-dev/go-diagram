@@ -1,0 +1,1859 @@
+openapi: 3.0.3
+info:
+  title: Visual Workspace Backend API
+  version: 0.1.0
+  description: |
+    Baseline contract for the Go backend. This file records current behavior, not a redesign.
+    Successful JSON endpoints use the `{status, message, data}` envelope. `/health` and `/` return
+    direct JSON objects. The bearer token is the access credential key itself; this service does
+    not issue JWTs.
+servers:
+  - url: http://localhost:8080
+    description: Local backend
+tags:
+  - name: System
+  - name: Auth
+  - name: Admin
+  - name: Diagram
+  - name: Sharing
+  - name: UI Design
+  - name: Async AI
+  - name: Workspace
+security:
+  - bearerAuth: []
+paths:
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      security: []
+      summary: Container health check
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /:
+    get:
+      tags: [System]
+      operationId: getServiceInfo
+      security: []
+      summary: Service information
+      responses:
+        '200':
+          description: Running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceInfoResponse'
+  /api/auth/verify:
+    post:
+      tags: [Auth]
+      operationId: verifyCredential
+      security: []
+      summary: Exchange a credential key for the current user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyCredentialRequest'
+            example:
+              credential_key: "RL-XXXX-XXXX-XXXX"
+      responses:
+        '200':
+          description: Authentication succeeded
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Get the authenticated user's profile
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AuthUser'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Stateless logout acknowledgement
+      responses:
+        '200':
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /api/admin/credentials:
+    get:
+      tags: [Admin]
+      operationId: listCredentials
+      summary: List access credentials
+      description: Requires an admin credential. Every returned credential_key is a display mask, not a usable token or digest.
+      responses:
+        '200':
+          description: Credential list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/CredentialSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Admin]
+      operationId: createCredential
+      summary: Create an access credential
+      description: Requires an admin credential. Returns the full raw token in credential_key once; subsequent reads return a masked string.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCredentialRequest'
+      responses:
+        '201':
+          description: Credential created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CredentialSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/admin/credentials/{id}:
+    parameters:
+      - $ref: '#/components/parameters/CredentialID'
+    put:
+      tags: [Admin]
+      operationId: updateCredential
+      summary: Update an access credential
+      description: Requires an admin credential. The returned credential_key is a display mask, not the raw bearer token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCredentialRequest'
+      responses:
+        '200':
+          description: Credential updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/CredentialSummary'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags: [Admin]
+      operationId: deleteCredential
+      summary: Delete an access credential
+      description: Requires an admin credential.
+      responses:
+        '200':
+          description: Credential deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /api/projects:
+    get:
+      tags: [Diagram]
+      operationId: listProjects
+      summary: List projects owned by the authenticated user
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 15
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        '200':
+          description: Paginated projects
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/PaginatedProjects'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Diagram]
+      operationId: createProject
+      summary: Create a diagram project
+      description: Requires `can_generate_diagram`. An empty prompt creates an empty canvas; a template ID loads a template; otherwise the AI generates the initial graph.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+            example:
+              prompt: "Buat flow login pengguna"
+              diagram_type: "flowchart"
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    get:
+      tags: [Diagram]
+      operationId: getProject
+      summary: Get a project and its chat history
+      responses:
+        '200':
+          description: Project detail
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Project'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/projects/{id}/chat:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    post:
+      tags: [Diagram]
+      operationId: chatProject
+      summary: Iterate a diagram with the AI copilot
+      description: Requires `can_generate_diagram` and project ownership.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+            example:
+              prompt: "Tambahkan langkah verifikasi OTP"
+              targeted_node_ids: ["step_login"]
+      responses:
+        '200':
+          description: Project updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}/pin:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    post:
+      tags: [Diagram]
+      operationId: toggleProjectPin
+      summary: Toggle a project's pinned state
+      responses:
+        '200':
+          description: Pin toggled
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/TogglePinResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}/versions:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    get:
+      tags: [Diagram]
+      operationId: listProjectVersions
+      summary: List diagram snapshots
+      responses:
+        '200':
+          description: Version list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DiagramVersion'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}/rollback/{versionId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+      - name: versionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Diagram]
+      operationId: rollbackProject
+      summary: Restore a project snapshot
+      description: Restores the snapshot, appends an assistant message, and records a new rollback version.
+      responses:
+        '200':
+          description: Project rolled back
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}/graph:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    put:
+      tags: [Diagram]
+      operationId: updateProjectGraph
+      summary: Persist canvas node and edge changes
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateGraphRequest'
+      responses:
+        '200':
+          description: Graph updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          success:
+                            type: boolean
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/templates:
+    get:
+      tags: [Diagram]
+      operationId: listDiagramTemplates
+      summary: List diagram templates
+      responses:
+        '200':
+          description: Template list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DiagramTemplate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}/share:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    post:
+      tags: [Sharing]
+      operationId: createProjectShare
+      summary: Create or return a project share link
+      description: Requires project ownership.
+      responses:
+        '200':
+          description: Share link
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/ProjectShare'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    get:
+      tags: [Sharing]
+      operationId: getProjectShare
+      summary: Get a project's share status
+      responses:
+        '200':
+          description: Share status or `{is_active:false}`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    delete:
+      tags: [Sharing]
+      operationId: revokeProjectShare
+      summary: Revoke a project's share link
+      responses:
+        '200':
+          description: Share revoked
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          is_active:
+                            type: boolean
+                            enum: [false]
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/shared/{token}:
+    parameters:
+      - $ref: '#/components/parameters/ShareToken'
+    get:
+      tags: [Sharing]
+      operationId: getSharedProject
+      security: []
+      summary: Read a shared project without authentication
+      responses:
+        '200':
+          description: Shared project
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/SharedProjectDetail'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /api/shared/{token}/fork:
+    parameters:
+      - $ref: '#/components/parameters/ShareToken'
+    post:
+      tags: [Sharing]
+      operationId: forkSharedProject
+      summary: Clone a shared project into the authenticated user's workspace
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ForkSharedProjectRequest'
+      responses:
+        '201':
+          description: Forked project
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/ui-design/templates:
+    get:
+      tags: [UI Design]
+      operationId: listUITemplates
+      summary: List UI design templates
+      responses:
+        '200':
+          description: UI template list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/UITemplate'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/ui-design/generate:
+    post:
+      tags: [UI Design]
+      operationId: generateUIDesign
+      summary: Generate a UI design synchronously
+      description: Requires `can_generate_ui`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUIDesignRequest'
+      responses:
+        '201':
+          description: UI project created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/ui-design/generate/stream:
+    post:
+      tags: [UI Design]
+      operationId: generateUIDesignStream
+      summary: Generate a UI design with Server-Sent Events
+      description: |
+        Requires `can_generate_ui`. On success the response is `text/event-stream`.
+        Event names include `status`, `progress`, `complete`, and `error`.
+        Errors after the stream starts are delivered as an SSE `error` event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUIDesignRequest'
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE frames in the form `event: <name>\\ndata: <json>\\n\\n`."
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/ui-design/projects/{id}/chat:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    post:
+      tags: [UI Design]
+      operationId: chatUIDesign
+      summary: Iterate a UI design with targeted chat
+      description: Requires `can_generate_ui`. Accepts `prompt` and falls back to `instruction`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChatRequest'
+      responses:
+        '200':
+          description: UI project updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/Project'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/ui-design/generate/async:
+    post:
+      tags: [Async AI]
+      operationId: createAsyncUIDesign
+      summary: Enqueue a UI generation job
+      description: Requires `can_generate_ui`. Returns 202 after the project and queue entry are created.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUIDesignRequest'
+      responses:
+        '202':
+          description: Job accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/AsyncJobInitResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/jobs/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Async AI]
+      operationId: getJobStatus
+      summary: Get an async UI job's status
+      description: Requires authentication and returns only jobs owned by the caller. The durable job binding in PostgreSQL is authoritative; Redis supplies the latest status. Missing or foreign jobs return 404.
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/JobStatusResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /internal/v1/jobs/callback:
+    post:
+      tags: [Async AI]
+      operationId: jobCallback
+      security:
+        - internalServiceKey: []
+      summary: Receive a completed or failed job from the Python worker
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobCallbackRequest'
+      responses:
+        '200':
+          description: Callback persisted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          job_id:
+                            type: string
+                          status:
+                            type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Job does not belong to the supplied project
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}/comments:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    get:
+      tags: [Workspace]
+      operationId: listProjectComments
+      summary: List canvas comments
+      description: Requires project ownership. Foreign or missing projects return 404.
+      responses:
+        '200':
+          description: Comment list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DesignComment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    post:
+      tags: [Workspace]
+      operationId: createProjectComment
+      summary: Create a canvas comment
+      description: Requires project ownership. Foreign or missing projects return 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommentRequest'
+      responses:
+        '201':
+          description: Comment created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/DesignComment'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/comments/{id}/status:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    patch:
+      tags: [Workspace]
+      operationId: updateCommentStatus
+      summary: Update a comment's status
+      description: Requires ownership of the comment's project. Foreign or missing comments return 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  default: resolved
+      responses:
+        '200':
+          description: Comment status updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/comments/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [Workspace]
+      operationId: deleteComment
+      summary: Delete a comment
+      description: Requires ownership of the comment's project. Foreign or missing comments return 404.
+      responses:
+        '200':
+          description: Comment deleted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessEnvelope'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/foundations:
+    get:
+      tags: [Workspace]
+      operationId: listFoundations
+      summary: List design foundations
+      responses:
+        '200':
+          description: Foundation list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DesignFoundation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/settings:
+    get:
+      tags: [Workspace]
+      operationId: getWorkspaceSettings
+      summary: Get workspace settings
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceSettings'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerError'
+    put:
+      tags: [Workspace]
+      operationId: updateWorkspaceSettings
+      summary: Update workspace settings
+      description: Admin only. Workspace settings are global rather than per-user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSettingsRequest'
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/WorkspaceSettings'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/ServerError'
+  /api/projects/{id}/exports:
+    parameters:
+      - $ref: '#/components/parameters/ProjectID'
+    get:
+      tags: [Workspace]
+      operationId: listProjectExports
+      summary: List exported artifacts for a project
+      description: Requires project ownership. Foreign or missing projects return 404.
+      responses:
+        '200':
+          description: Export list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ProjectExport'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ServerError'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Raw access credential key. The service does not issue JWTs.
+    internalServiceKey:
+      type: apiKey
+      in: header
+      name: X-Internal-Service-Key
+      description: Shared secret used by the Python worker for callbacks.
+  parameters:
+    ProjectID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CredentialID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ShareToken:
+      name: token
+      in: path
+      required: true
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    Forbidden:
+      description: Credential lacks permission
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    NotFound:
+      description: Resource not found or not owned by the caller
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+    ServerError:
+      description: Server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+  schemas:
+    SuccessEnvelope:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [success]
+        message:
+          type: string
+        data:
+          nullable: true
+    ErrorEnvelope:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+        error:
+          type: string
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          enum: [healthy]
+        service:
+          type: string
+    ServiceInfoResponse:
+      type: object
+      required: [service, status, health]
+      properties:
+        service:
+          type: string
+        status:
+          type: string
+        health:
+          type: string
+    VerifyCredentialRequest:
+      type: object
+      required: [credential_key]
+      properties:
+        credential_key:
+          type: string
+          description: The full raw bearer credential, not a display mask or stored digest. Existing credentials remain valid after migration.
+          minLength: 1
+    AuthUser:
+      type: object
+      required: [id, credential_key, name, role, is_active, can_generate_diagram, can_generate_ui, is_expired, expires_in_human]
+      properties:
+        id:
+          type: string
+          format: uuid
+        credential_key:
+          type: string
+          description: Display mask only; not a usable bearer token or stored digest. Use LoginResponse.token for authentication.
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        is_active:
+          type: boolean
+        can_generate_diagram:
+          type: boolean
+        can_generate_ui:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_expired:
+          type: boolean
+        expires_in_human:
+          type: string
+    LoginResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+          description: The access credential key returned as the bearer token.
+        user:
+          $ref: '#/components/schemas/AuthUser'
+    CredentialSummary:
+      type: object
+      required: [id, credential_key, name, role, is_active, can_generate_diagram, can_generate_ui, is_expired, expires_in_human, project_count, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        credential_key:
+          type: string
+          description: Full generated token only in the create response. All list and update responses return a display mask ending in eight asterisks.
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        is_active:
+          type: boolean
+        can_generate_diagram:
+          type: boolean
+        can_generate_ui:
+          type: boolean
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_expired:
+          type: boolean
+        expires_in_human:
+          type: string
+        project_count:
+          type: integer
+        last_login_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateCredentialRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+        duration_minutes:
+          type: integer
+          minimum: 0
+        duration_hours:
+          type: integer
+          minimum: 0
+        duration_days:
+          type: integer
+          minimum: 0
+        role:
+          type: string
+          enum: [user, admin]
+          default: user
+        expires_at:
+          type: string
+          description: Optional ISO-8601 date/time.
+        can_generate_diagram:
+          type: boolean
+        can_generate_ui:
+          type: boolean
+    UpdateCredentialRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user, admin]
+        is_active:
+          type: boolean
+        extend_minutes:
+          type: integer
+        extend_hours:
+          type: integer
+        extend_days:
+          type: integer
+        duration_minutes:
+          type: integer
+        duration_hours:
+          type: integer
+        duration_days:
+          type: integer
+        expires_at:
+          type: string
+          nullable: true
+        set_permanent:
+          type: boolean
+        can_generate_diagram:
+          type: boolean
+        can_generate_ui:
+          type: boolean
+    CreateProjectRequest:
+      type: object
+      properties:
+        prompt:
+          type: string
+        diagram_type:
+          type: string
+          default: flowchart
+        template_id:
+          type: string
+          nullable: true
+    ChatRequest:
+      type: object
+      required: [prompt]
+      properties:
+        prompt:
+          type: string
+        message:
+          type: string
+        instruction:
+          type: string
+        foundation:
+          type: string
+        targeted_node_ids:
+          type: array
+          items:
+            type: string
+        selected_component_id:
+          type: string
+        target:
+          type: object
+          additionalProperties: true
+        selection_context:
+          type: object
+          additionalProperties: true
+        version_number:
+          type: integer
+    UpdateGraphRequest:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        edges:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+    Project:
+      type: object
+      required: [id, title, diagram_type, current_nodes, current_edges, nodes, edges, messages, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        diagram_type:
+          type: string
+        current_nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        current_edges:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        edges:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+        version:
+          type: integer
+        version_number:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    ChatMessage:
+      type: object
+      required: [id, project_id, role, content, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant, system]
+        content:
+          type: string
+        target_node_ids:
+          type: array
+          items:
+            type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    PaginatedProjects:
+      type: object
+      required: [items, total_count, limit, offset, has_more]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectSummary'
+        total_count:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        has_more:
+          type: boolean
+    ProjectSummary:
+      type: object
+      required: [id, title, diagram_type, is_pinned, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        diagram_type:
+          type: string
+        project_mode:
+          type: string
+        is_pinned:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TogglePinResponse:
+      type: object
+      required: [id, is_pinned]
+      properties:
+        id:
+          type: string
+          format: uuid
+        is_pinned:
+          type: boolean
+    DiagramVersion:
+      type: object
+      required: [id, project_id, version_number, nodes, edges, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        change_summary:
+          type: string
+        nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        edges:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        trigger_message_id:
+          type: string
+          format: uuid
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    DiagramTemplate:
+      type: object
+      required: [id, name, category, diagram_type, nodes, edges, is_featured, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        diagram_type:
+          type: string
+        nodes:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        edges:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        is_featured:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    UITemplate:
+      type: object
+      required: [id, name, category, device, theme, sections, code_export, is_featured, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        category:
+          type: string
+        device:
+          type: string
+        description:
+          type: string
+        theme:
+          type: object
+          additionalProperties: true
+        sections:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        code_export:
+          type: object
+          additionalProperties: true
+        is_featured:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    ProjectShare:
+      type: object
+      required: [id, share_token, project_id, title, is_active, view_count, share_url, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        share_token:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        is_active:
+          type: boolean
+        view_count:
+          type: integer
+        share_url:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SharedProjectDetail:
+      type: object
+      required: [share, project, messages]
+      properties:
+        share:
+          $ref: '#/components/schemas/ProjectShare'
+        project:
+          $ref: '#/components/schemas/Project'
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChatMessage'
+    ForkSharedProjectRequest:
+      type: object
+      properties:
+        title:
+          type: string
+    CreateUIDesignRequest:
+      type: object
+      properties:
+        prompt:
+          type: string
+        device:
+          type: string
+          enum: [web, mobile, desktop, all, multi]
+          default: web
+        theme:
+          type: string
+        theme_mode:
+          type: string
+          enum: [dark, light, auto]
+        accent_color:
+          type: string
+          description: Hex color such as #10b981.
+        custom_tone:
+          type: string
+        foundation:
+          type: string
+        archetype:
+          type: string
+        density:
+          type: string
+        product_context:
+          type: string
+        primary_user:
+          type: string
+        primary_task:
+          type: string
+        template_id:
+          type: string
+    AsyncJobInitResponse:
+      type: object
+      required: [job_id, project_id, status, correlation_id, message]
+      properties:
+        job_id:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued]
+        correlation_id:
+          type: string
+        message:
+          type: string
+    JobStatusResponse:
+      type: object
+      required: [job_id, status]
+      properties:
+        job_id:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [queued, processing, completed, failed]
+        correlation_id:
+          type: string
+        error:
+          type: string
+          nullable: true
+        project:
+          $ref: '#/components/schemas/Project'
+    JobCallbackRequest:
+      type: object
+      required: [job_id, project_id, correlation_id, status, execution_metrics]
+      properties:
+        job_id:
+          type: string
+        project_id:
+          type: string
+          format: uuid
+        correlation_id:
+          type: string
+        status:
+          type: string
+          enum: [success, failed]
+        execution_metrics:
+          type: object
+          required: [total_latency_ms, total_tokens_consumed, agents_executed, llm_provider, llm_model]
+          properties:
+            total_latency_ms:
+              type: integer
+            total_tokens_consumed:
+              type: integer
+            agents_executed:
+              type: array
+              items:
+                type: string
+            llm_provider:
+              type: string
+            llm_model:
+              type: string
+        result:
+          type: object
+          additionalProperties: true
+        error:
+          type: string
+          nullable: true
+    CreateCommentRequest:
+      type: object
+      required: [content]
+      properties:
+        node_id:
+          type: string
+        author:
+          type: string
+          default: Designer
+        content:
+          type: string
+        position_x:
+          type: number
+        position_y:
+          type: number
+        metadata:
+          type: object
+          additionalProperties: true
+    DesignComment:
+      type: object
+      required: [id, project_id, author, content, status, position_x, position_y, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        node_id:
+          type: string
+          nullable: true
+        author:
+          type: string
+        content:
+          type: string
+        status:
+          type: string
+          enum: [open, resolved]
+        position_x:
+          type: number
+        position_y:
+          type: number
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    DesignFoundation:
+      type: object
+      required: [id, name, category, tokens, is_default, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        category:
+          type: string
+        description:
+          type: string
+        tokens:
+          type: object
+          additionalProperties: true
+        is_default:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WorkspaceSettings:
+      type: object
+      required: [id, default_mode, theme, preferred_ai_model, canvas_preferences, updated_at]
+      properties:
+        id:
+          type: string
+        default_mode:
+          type: string
+        theme:
+          type: string
+        preferred_ai_model:
+          type: string
+        canvas_preferences:
+          type: object
+          additionalProperties: true
+        updated_at:
+          type: string
+          format: date-time
+    UpdateSettingsRequest:
+      type: object
+      properties:
+        default_mode:
+          type: string
+        theme:
+          type: string
+        preferred_ai_model:
+          type: string
+        canvas_preferences:
+          type: object
+          additionalProperties: true
+    ProjectExport:
+      type: object
+      required: [id, project_id, export_type, file_name, content, file_size_bytes, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        export_type:
+          type: string
+        file_name:
+          type: string
+        content:
+          type: string
+        file_size_bytes:
+          type: integer
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
