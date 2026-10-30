@@ -48,9 +48,26 @@ func RunMigrations(ctx context.Context, connection *sql.DB) error {
 	if connection == nil {
 		return fmt.Errorf("database connection is not configured")
 	}
-	log.Println("Checking and running database migrations (init.sql)...")
-	if _, err := connection.ExecContext(ctx, initSQL); err != nil {
+	tx, err := connection.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin database migration: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock($1)", migrationLock); err != nil {
+		return fmt.Errorf("lock database migration: %w", err)
+	}
+	log.Println("Checking database baseline and connected workspace migrations...")
+	if _, err := tx.ExecContext(ctx, initSQL); err != nil {
 		return fmt.Errorf("failed executing migration script: %w", err)
+	}
+	if err := migrateWorkspace(ctx, tx); err != nil {
+		return err
+	}
+	if err := backfillWorkspace(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit database migrations: %w", err)
 	}
 	log.Println("Database schema and initial seeds are up to date")
 	return nil

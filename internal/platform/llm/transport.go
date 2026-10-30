@@ -3,13 +3,13 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 )
 
 type LLMStreamCallback func(delta string, totalTokens int)
@@ -30,6 +30,10 @@ func (s *Client) callOpenAIWithCallback(
 	responseFormat *ResponseFormatOpenAI,
 	onChunk LLMStreamCallback,
 ) (string, error) {
+	return s.callOpenAIWithContext(context.Background(), systemPrompt, historyMessages, newPrompt, responseFormat, onChunk)
+}
+
+func (s *Client) callOpenAIWithContext(ctx context.Context, systemPrompt string, historyMessages []Message, newPrompt string, responseFormat *ResponseFormatOpenAI, onChunk LLMStreamCallback) (string, error) {
 	// Di OpenAI, System Prompt dimasukkan sebagai message pertama dengan role "system"
 	var openAIMessages []MessageOpenAI
 	openAIMessages = append(openAIMessages, MessageOpenAI{
@@ -91,7 +95,10 @@ func (s *Client) callOpenAIWithCallback(
 
 	maxAttempts := 3
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		req, err := http.NewRequest(http.MethodPost, s.baseURL, bytes.NewReader(bodyBytes))
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL, bytes.NewReader(bodyBytes))
 		if err != nil {
 			return "", fmt.Errorf("failed to create HTTP request for OpenAI: %w", err)
 		}
@@ -109,7 +116,9 @@ func (s *Client) callOpenAIWithCallback(
 			if attempt == maxAttempts {
 				return "", fmt.Errorf("failed to call OpenAI API after %d attempts: %w", maxAttempts, err)
 			}
-			time.Sleep(retryBackoff(attempt))
+			if err := waitForRetry(ctx, attempt); err != nil {
+				return "", err
+			}
 			continue
 		}
 
@@ -120,7 +129,9 @@ func (s *Client) callOpenAIWithCallback(
 			trimmed := strings.TrimSpace(string(respBytes))
 			log.Printf("[AIService] Upstream HTTP %d (retryable) on attempt %d/%d: %s", respStatusCode, attempt, maxAttempts, trimmed)
 			if attempt < maxAttempts {
-				time.Sleep(retryBackoff(attempt))
+				if err := waitForRetry(ctx, attempt); err != nil {
+					return "", err
+				}
 				continue
 			}
 		}
@@ -188,15 +199,17 @@ func (s *Client) callOpenAIWithCallback(
 			rawText := sb.String()
 			log.Printf("[AIService] Streamed response completed (attempt %d/%d): length=%d chars, completion_tokens=%d, finish_reason=%q, scanErr=%v, streamErr=%v",
 				attempt, maxAttempts, len(rawText), completionTokens, lastFinishReason, scanErr, streamErr)
-			if lastFinishReason == "length" {
-				log.Printf("[AIService] WARNING: LLM output was truncated by length limit (max_tokens=%d)!", s.maxTokens)
+			if lastFinishReason == "length" || lastFinishReason == "content_filter" || lastFinishReason == "tool_calls" {
+				return "", ErrIncompleteCompletion
 			}
 			isProviderUnavailable := isAggregatorErrorText(rawText)
 			if streamErr != nil || scanErr != nil || strings.TrimSpace(rawText) == "" || isProviderUnavailable {
 				if attempt < maxAttempts {
 					log.Printf("[AIService] Upstream failure/interruption (isProviderUnavailable=%v, len=%d) on attempt %d/%d, retrying...",
 						isProviderUnavailable, len(rawText), attempt, maxAttempts)
-					time.Sleep(retryBackoff(attempt))
+					if err := waitForRetry(ctx, attempt); err != nil {
+						return "", err
+					}
 					continue
 				}
 				if isProviderUnavailable {
@@ -220,21 +233,27 @@ func (s *Client) callOpenAIWithCallback(
 			if attempt == maxAttempts {
 				return "", fmt.Errorf("failed to read response body: %w", err)
 			}
-			time.Sleep(retryBackoff(attempt))
+			if err := waitForRetry(ctx, attempt); err != nil {
+				return "", err
+			}
 			continue
 		}
 
 		var openAIResp ChatResponseOpenAI
 		if err := json.Unmarshal(respBytes, &openAIResp); err != nil {
 			if attempt < maxAttempts {
-				time.Sleep(retryBackoff(attempt))
+				if err := waitForRetry(ctx, attempt); err != nil {
+					return "", err
+				}
 				continue
 			}
 			return "", fmt.Errorf("failed to unmarshal OpenAI response: %w: %s", err, string(respBytes))
 		}
 		if len(openAIResp.Choices) == 0 {
 			if attempt < maxAttempts {
-				time.Sleep(retryBackoff(attempt))
+				if err := waitForRetry(ctx, attempt); err != nil {
+					return "", err
+				}
 				continue
 			}
 			return "", fmt.Errorf("empty choices in OpenAI response: %s", string(respBytes))
@@ -243,8 +262,8 @@ func (s *Client) callOpenAIWithCallback(
 		choice := openAIResp.Choices[0]
 		log.Printf("[AIService] Token usage: prompt=%d, completion=%d, total=%d, finish_reason=%q (requested_max=%d)",
 			openAIResp.Usage.PromptTokens, openAIResp.Usage.CompletionTokens, openAIResp.Usage.TotalTokens, choice.FinishReason, s.maxTokens)
-		if choice.FinishReason == "length" {
-			log.Printf("[AIService] WARNING: LLM output was truncated by length limit (completion_tokens=%d, max_tokens=%d)!", openAIResp.Usage.CompletionTokens, s.maxTokens)
+		if choice.FinishReason == "length" || choice.FinishReason == "content_filter" || choice.FinishReason == "tool_calls" {
+			return "", ErrIncompleteCompletion
 		}
 
 		rawText := choice.Message.Content
@@ -253,7 +272,9 @@ func (s *Client) callOpenAIWithCallback(
 			if attempt < maxAttempts {
 				log.Printf("[AIService] Upstream provider unavailable in non-stream response (isProviderUnavailable=%v) on attempt %d/%d, retrying...",
 					isProviderUnavailable, attempt, maxAttempts)
-				time.Sleep(retryBackoff(attempt))
+				if err := waitForRetry(ctx, attempt); err != nil {
+					return "", err
+				}
 				continue
 			}
 			if isProviderUnavailable {
@@ -272,6 +293,10 @@ func (s *Client) callAnthropic(
 	historyMessages []Message,
 	newPrompt string,
 ) (string, error) {
+	return s.callAnthropicWithContext(context.Background(), systemPrompt, historyMessages, newPrompt)
+}
+
+func (s *Client) callAnthropicWithContext(ctx context.Context, systemPrompt string, historyMessages []Message, newPrompt string) (string, error) {
 	rawMessages := make([]map[string]string, 0, len(historyMessages)+1)
 	for _, msg := range historyMessages {
 		role := msg.Role
@@ -329,7 +354,10 @@ func (s *Client) callAnthropic(
 	maxAttempts := 3
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		req, err := http.NewRequest(http.MethodPost, s.baseURL, bytes.NewReader(bodyBytes))
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL, bytes.NewReader(bodyBytes))
 		if err != nil {
 			return "", fmt.Errorf("failed to create HTTP request: %w", err)
 		}
@@ -343,7 +371,9 @@ func (s *Client) callAnthropic(
 			if attempt == maxAttempts {
 				return "", fmt.Errorf("failed to call Anthropic API after %d attempts: %w", maxAttempts, err)
 			}
-			time.Sleep(retryBackoff(attempt))
+			if err := waitForRetry(ctx, attempt); err != nil {
+				return "", err
+			}
 			continue
 		}
 
@@ -354,14 +384,18 @@ func (s *Client) callAnthropic(
 			if attempt == maxAttempts {
 				return "", fmt.Errorf("failed to read response body: %w", err)
 			}
-			time.Sleep(retryBackoff(attempt))
+			if err := waitForRetry(ctx, attempt); err != nil {
+				return "", err
+			}
 			continue
 		}
 
 		respStatusCode = resp.StatusCode
 		if retryableHTTPStatus(respStatusCode) || (respStatusCode == http.StatusOK && strings.Contains(string(respBytes), "No available accounts")) {
 			if attempt < maxAttempts {
-				time.Sleep(retryBackoff(attempt))
+				if err := waitForRetry(ctx, attempt); err != nil {
+					return "", err
+				}
 				continue
 			}
 		}
@@ -380,6 +414,9 @@ func (s *Client) callAnthropic(
 
 	if anthropicResp.Error != nil {
 		return "", fmt.Errorf("Anthropic API error: %s - %s", anthropicResp.Error.Type, anthropicResp.Error.Message)
+	}
+	if anthropicResp.StopReason == "max_tokens" || anthropicResp.StopReason == "refusal" || anthropicResp.StopReason == "tool_use" {
+		return "", ErrIncompleteCompletion
 	}
 
 	if len(anthropicResp.Content) == 0 {
@@ -409,10 +446,14 @@ func (s *Client) callAnthropic(
 }
 
 func (s *Client) CallLLM(systemPrompt string, historyMessages []Message, newPrompt string) (string, error) {
+	return s.CallLLMContext(context.Background(), systemPrompt, historyMessages, newPrompt)
+}
+
+func (s *Client) CallLLMContext(ctx context.Context, systemPrompt string, historyMessages []Message, newPrompt string) (string, error) {
 	if s.provider == "openai" {
-		return s.callOpenAI(systemPrompt, historyMessages, newPrompt, &ResponseFormatOpenAI{Type: "json_object"})
+		return s.callOpenAIWithContext(ctx, systemPrompt, historyMessages, newPrompt, &ResponseFormatOpenAI{Type: "json_object"}, nil)
 	}
-	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+	return s.callAnthropicWithContext(ctx, systemPrompt, historyMessages, newPrompt)
 }
 
 func (s *Client) CallLLMStream(
@@ -421,17 +462,31 @@ func (s *Client) CallLLMStream(
 	newPrompt string,
 	onChunk LLMStreamCallback,
 ) (string, error) {
+	return s.CallLLMStreamContext(context.Background(), systemPrompt, historyMessages, newPrompt, onChunk)
+}
+
+func (s *Client) CallLLMStreamContext(
+	ctx context.Context,
+	systemPrompt string,
+	historyMessages []Message,
+	newPrompt string,
+	onChunk LLMStreamCallback,
+) (string, error) {
 	if s.provider == "openai" {
-		return s.callOpenAIWithCallback(systemPrompt, historyMessages, newPrompt, &ResponseFormatOpenAI{Type: "json_object"}, onChunk)
+		return s.callOpenAIWithContext(ctx, systemPrompt, historyMessages, newPrompt, &ResponseFormatOpenAI{Type: "json_object"}, onChunk)
 	}
-	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+	return s.callAnthropicWithContext(ctx, systemPrompt, historyMessages, newPrompt)
 }
 
 func (s *Client) CallLLMText(systemPrompt string, historyMessages []Message, newPrompt string) (string, error) {
+	return s.CallLLMTextContext(context.Background(), systemPrompt, historyMessages, newPrompt)
+}
+
+func (s *Client) CallLLMTextContext(ctx context.Context, systemPrompt string, historyMessages []Message, newPrompt string) (string, error) {
 	if s.provider == "openai" {
-		return s.callOpenAI(systemPrompt, historyMessages, newPrompt, nil)
+		return s.callOpenAIWithContext(ctx, systemPrompt, historyMessages, newPrompt, nil, nil)
 	}
-	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+	return s.callAnthropicWithContext(ctx, systemPrompt, historyMessages, newPrompt)
 }
 
 func (s *Client) CallLLMTextStream(
@@ -440,10 +495,20 @@ func (s *Client) CallLLMTextStream(
 	newPrompt string,
 	onChunk LLMStreamCallback,
 ) (string, error) {
+	return s.CallLLMTextStreamContext(context.Background(), systemPrompt, historyMessages, newPrompt, onChunk)
+}
+
+func (s *Client) CallLLMTextStreamContext(
+	ctx context.Context,
+	systemPrompt string,
+	historyMessages []Message,
+	newPrompt string,
+	onChunk LLMStreamCallback,
+) (string, error) {
 	if s.provider == "openai" {
-		return s.callOpenAIWithCallback(systemPrompt, historyMessages, newPrompt, nil, onChunk)
+		return s.callOpenAIWithContext(ctx, systemPrompt, historyMessages, newPrompt, nil, onChunk)
 	}
-	return s.callAnthropic(systemPrompt, historyMessages, newPrompt)
+	return s.callAnthropicWithContext(ctx, systemPrompt, historyMessages, newPrompt)
 }
 
 func (s *Client) SanitizeJSON(raw string) string {

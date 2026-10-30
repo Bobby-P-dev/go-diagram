@@ -31,7 +31,7 @@ ROUTES_PATH = ROOT / "internal" / "app" / "routes.go"
 
 HTTP_METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 PATH_LEVEL_KEYS = {"$ref", "summary", "description", "servers", "parameters"}
-EXPECTED_OPERATIONS = 38
+EXPECTED_OPERATIONS = 59
 
 MISSING = object()
 errors: list[str] = []

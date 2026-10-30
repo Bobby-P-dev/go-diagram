@@ -5,8 +5,10 @@ info:
   description: |
     Baseline contract for the Go backend. This file records current behavior, not a redesign.
     Successful JSON endpoints use the `{status, message, data}` envelope. `/health` and `/` return
-    direct JSON objects. The bearer token is the access credential key itself; this service does
-    not issue JWTs.
+    direct JSON objects. Browser login uses a revocable HttpOnly cookie session, not JWTs.
+    Cookie-authenticated writes require X-CSRF-Token from login/session responses and an allowed
+    Origin when sent. The legacy credential-key bearer mechanism is disabled by default;
+    AUTH_LEGACY_CREDENTIALS=true is a temporary compatibility opt-in only.
 servers:
   - url: http://localhost:8080
     description: Local backend
@@ -19,9 +21,280 @@ tags:
   - name: UI Design
   - name: Async AI
   - name: Workspace
+  - name: Product
+  - name: Artifact
+  - name: Generation
 security:
+  - browserSession: []
   - bearerAuth: []
 paths:
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      operationId: passwordLogin
+      security: []
+      summary: Sign in with email and password and rotate the browser session
+      description: |
+        Requires application/json; body limited to 4096 bytes. Returns a generic error for
+        unknown email, wrong password, inactive or expired identity. Passwords are not trimmed.
+        Rate limited to 10 attempts per normalized email and 100 per direct peer IP per 15 minutes.
+        Sets vw_session, HttpOnly, SameSite=Lax, Path=/, with a 12-hour absolute lifetime.
+        Secure is enabled by default and mandatory in the production Compose configuration.
+        Session secrets are not returned in JSON; csrf_token is retained in browser memory only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: {type: string, format: email, maxLength: 254}
+                password: {type: string, format: password, maxLength: 256}
+      responses:
+        '200':
+          description: Login accepted and cookie set
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BrowserSessionEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '415': {description: Content-Type must be application/json}
+        '429': {description: Attempt or password verifier concurrency limit reached; Retry-After 900 seconds}
+        '500': {description: Authentication storage unavailable}
+  /api/auth/session:
+    get:
+      tags: [Auth]
+      operationId: getBrowserSession
+      security: [{browserSession: []}]
+      summary: Restore the current browser identity and CSRF token
+      responses:
+        '200':
+          description: Active session, Cache-Control no-store
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/BrowserSessionEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '500': {description: Profile storage unavailable}
+    delete:
+      tags: [Auth]
+      operationId: revokeBrowserSession
+      security: [{browserSession: []}]
+      summary: Revoke the current session and expire its cookie
+      parameters:
+        - {name: X-CSRF-Token, in: header, required: true, schema: {type: string}}
+      responses:
+        '200':
+          description: Session revoked and cookie expired
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SuccessEnvelope'}
+        '401': {$ref: '#/components/responses/Unauthorized'}
+        '403': {$ref: '#/components/responses/Forbidden'}
+        '500': {description: Session could not be revoked; client must not assume logout succeeded}
+  /api/v2/projects/{projectId}/threads/{threadId}/generations:
+    post:
+      tags: [Generation]
+      operationId: startV2Generation
+      summary: Start an asynchronous generation run from a trigger message
+      description: |
+        Validates the trigger message and project ownership, freezes the exact
+        resolved context manifest, and inserts a queued generation run record.
+        Requires an authenticated browser session (or opt-in legacy Bearer authentication)
+        and an Idempotency-Key header. Cookie-authenticated writes also require X-CSRF-Token.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: threadId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: {type: string, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/V2StartGenerationRequest'
+      responses:
+        '202':
+          description: Generation run accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2GenerationRunEnvelope'
+        '400':
+          description: Invalid request or missing Idempotency-Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Resource not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Idempotency conflict or revision conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '413':
+          description: Request body too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '422':
+          description: Context budget exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/generations/{runId}:
+    get:
+      tags: [Generation]
+      operationId: getV2Generation
+      summary: Get the current status and committed results of a generation run
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: runId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Generation run retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2GenerationRunEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Generation run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/generations/{runId}/cancel:
+    post:
+      tags: [Generation]
+      operationId: cancelV2Generation
+      summary: Request cooperative cancellation of a generation run
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: runId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Generation run canceled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2GenerationRunEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Generation run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Generation run is already in terminal state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/generations/{runId}/events:
+    get:
+      tags: [Generation]
+      operationId: streamV2GenerationEvents
+      summary: Subscribe to real-time server-sent events for a generation run
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: runId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      responses:
+        '200':
+          description: Server-sent event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Generation run not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
   /health:
     get:
       tags: [System]
@@ -52,8 +325,10 @@ paths:
     post:
       tags: [Auth]
       operationId: verifyCredential
+      deprecated: true
       security: []
       summary: Exchange a credential key for the current user profile
+      description: Disabled by default; returns 404 unless AUTH_LEGACY_CREDENTIALS=true.
       requestBody:
         required: true
         content:
@@ -80,6 +355,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404': {description: Legacy credential login disabled}
   /api/auth/me:
     get:
       tags: [Auth]
@@ -103,7 +379,8 @@ paths:
     post:
       tags: [Auth]
       operationId: logout
-      summary: Stateless logout acknowledgement
+      summary: Revoke the browser session or acknowledge opt-in legacy client logout
+      description: Cookie requests require X-CSRF-Token. Legacy bearer logout remains stateless.
       responses:
         '200':
           description: Logged out
@@ -1079,12 +1356,898 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ServerError'
+  /api/v2/projects:
+    post:
+      tags:
+      - Product
+      operationId: createV2Project
+      summary: Create a new project container
+      parameters:
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[!-~]+$
+        description: Unique idempotency key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateV2ProjectRequest'
+      responses:
+        '201':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ProjectEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+    get:
+      tags:
+      - Product
+      operationId: listV2Projects
+      summary: List projects owned by the user
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: cursor
+        in: query
+        schema:
+          type: string
+          maxLength: 2048
+        description: Pagination cursor
+      responses:
+        '200':
+          description: Projects list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ProjectListEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/threads:
+    post:
+      tags:
+      - Product
+      operationId: createV2Thread
+      summary: Create a new thread in project
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[!-~]+$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateV2ThreadRequest'
+      responses:
+        '201':
+          description: Thread created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ThreadEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+    get:
+      tags:
+      - Product
+      operationId: listV2Threads
+      summary: List threads in project
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: cursor
+        in: query
+        schema:
+          type: string
+          maxLength: 2048
+      responses:
+        '200':
+          description: Threads list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ThreadListEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/threads/{threadId}/context/resolve:
+    post:
+      tags: [Generation]
+      operationId: resolveV2Context
+      summary: Preview project-scoped artifact and chat context without inference
+      description: |
+        Read-only preview; no Idempotency-Key is required and no run is created.
+        Owner access and same-project membership are checked in a repeatable-read
+        snapshot. Latest artifact heads are resolved to exact revision IDs.
+        Explicit sources are considered in request order; project_relevant uses
+        up to 50 newest non-archived artifact heads, not semantic search.
+        Artifact bodies have budget priority over recent chat history. Current
+        thread history is automatic; additional threads must be selected.
+        Sources/messages are omitted whole, never truncated into invalid JSON.
+        This is not a frozen generation input: generation must resolve again
+        at acceptance. Preview source text is untrusted data, not instructions.
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+        - name: threadId
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/V2ResolveContextRequest'
+            example:
+              mode: explicit
+              sources:
+                - artifact_id: '44444444-4444-4444-8444-444444444444'
+              max_content_bytes: 49152
+      responses:
+        '200':
+          description: Exact included refs, budget omissions and history limits
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ContextEnvelope'
+        '400':
+          description: Invalid identifiers, selections, unknown fields or budget
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/V2ErrorEnvelope'}
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/V2ErrorEnvelope'}
+        '404':
+          description: Project, thread or non-archived source not accessible in scope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/V2ErrorEnvelope'}
+        '413':
+          description: Request exceeds 32 KiB
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/V2ErrorEnvelope'}
+        '422':
+          description: Project title and description alone exceed content budget
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/V2ErrorEnvelope'}
+        '500':
+          description: Context read failed; no partial preview returned
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/V2ErrorEnvelope'}
+  /api/v2/projects/{projectId}/threads/{threadId}/messages:
+    post:
+      tags:
+      - Product
+      operationId: postV2UserMessage
+      summary: Post user message to thread
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: threadId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[!-~]+$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostV2MessageRequest'
+      responses:
+        '201':
+          description: Message posted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2MessageEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Thread not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+    get:
+      tags:
+      - Product
+      operationId: listV2Messages
+      summary: List messages in thread
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: threadId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: cursor
+        in: query
+        schema:
+          type: string
+          maxLength: 2048
+      responses:
+        '200':
+          description: Messages list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2MessageListEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Thread not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/artifacts:
+    post:
+      tags:
+      - Artifact
+      operationId: createV2Artifact
+      summary: Create artifact and initial revision atomically
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[!-~]+$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateV2ArtifactRequest'
+      responses:
+        '201':
+          description: Artifact created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ArtifactEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '422':
+          description: Content invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+    get:
+      tags:
+      - Artifact
+      operationId: listV2Artifacts
+      summary: List project artifacts
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: cursor
+        in: query
+        schema:
+          type: string
+          maxLength: 2048
+      - name: type
+        in: query
+        schema:
+          type: string
+          pattern: ^[a-z][a-z0-9_]{0,49}$
+      responses:
+        '200':
+          description: Artifacts list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ArtifactListEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Project not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/artifacts/{artifactId}:
+    get:
+      tags:
+      - Artifact
+      operationId: getV2Artifact
+      summary: Get artifact detail with current revision
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: artifactId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Artifact detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ArtifactEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/artifacts/{artifactId}/revisions:
+    post:
+      tags:
+      - Artifact
+      operationId: appendV2Revision
+      summary: Append a new immutable revision
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: artifactId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[!-~]+$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppendV2RevisionRequest'
+      responses:
+        '201':
+          description: Revision appended
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2RevisionEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Revision conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '422':
+          description: Content invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+    get:
+      tags:
+      - Artifact
+      operationId: listV2Revisions
+      summary: List revisions of an artifact
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: artifactId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 20
+      - name: cursor
+        in: query
+        schema:
+          type: string
+          maxLength: 2048
+      responses:
+        '200':
+          description: Revisions list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2RevisionListEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/artifacts/{artifactId}/revisions/{revisionId}:
+    get:
+      tags:
+      - Artifact
+      operationId: getV2Revision
+      summary: Get specific revision
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: artifactId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: revisionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Revision detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2RevisionEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Revision not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+  /api/v2/projects/{projectId}/artifacts/{artifactId}/restores:
+    post:
+      tags:
+      - Artifact
+      operationId: restoreV2Revision
+      summary: Restore target revision as newest revision N+1
+      parameters:
+      - name: projectId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: artifactId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: Idempotency-Key
+        in: header
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[!-~]+$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RestoreV2RevisionRequest'
+      responses:
+        '201':
+          description: Revision restored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2RevisionEnvelope'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '401':
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '404':
+          description: Target or artifact not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '409':
+          description: Revision conflict
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/V2ErrorEnvelope'
 components:
   securitySchemes:
+    browserSession:
+      type: apiKey
+      in: cookie
+      name: vw_session
+      description: Opaque browser session secret; only its SHA-256 hash is stored server-side.
     bearerAuth:
       type: http
       scheme: bearer
-      description: Raw access credential key. The service does not issue JWTs.
+      description: Legacy raw access credential key, disabled unless AUTH_LEGACY_CREDENTIALS=true. Not JWT.
     internalServiceKey:
       type: apiKey
       in: header
@@ -1192,6 +2355,28 @@ components:
           type: string
           description: The full raw bearer credential, not a display mask or stored digest. Existing credentials remain valid after migration.
           minLength: 1
+    BrowserSessionEnvelope:
+      type: object
+      required: [status, message, data]
+      properties:
+        status: {type: string, enum: [success]}
+        message: {type: string}
+        data:
+          type: object
+          required: [user, csrf_token]
+          properties:
+            csrf_token: {type: string, minLength: 64, maxLength: 64}
+            user:
+              type: object
+              required: [id, email, name, role, is_active, can_generate_diagram, can_generate_ui]
+              properties:
+                id: {type: string, format: uuid}
+                email: {type: string, format: email}
+                name: {type: string}
+                role: {type: string}
+                is_active: {type: boolean}
+                can_generate_diagram: {type: boolean}
+                can_generate_ui: {type: boolean}
     AuthUser:
       type: object
       required: [id, credential_key, name, role, is_active, can_generate_diagram, can_generate_ui, is_expired, expires_in_human]
@@ -1863,3 +3048,1052 @@ components:
         created_at:
           type: string
           format: date-time
+
+    CreateV2ProjectRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          maxLength: 1000
+      required:
+      - title
+      additionalProperties: false
+    CreateV2ThreadRequest:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        mode_hint:
+          type: string
+          maxLength: 50
+        active_artifact_id:
+          type: string
+          format: uuid
+      required:
+      - title
+      additionalProperties: false
+    PostV2MessageRequest:
+      type: object
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 100000
+        client_message_id:
+          type: string
+          minLength: 1
+          maxLength: 128
+      required:
+      - content
+      - client_message_id
+      additionalProperties: false
+    V2Project:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+        is_pinned:
+          type: boolean
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - user_id
+      - title
+      - is_pinned
+      - created_at
+      - updated_at
+      additionalProperties: false
+    V2Thread:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        mode_hint:
+          type: string
+        active_artifact_id:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - project_id
+      - title
+      - mode_hint
+      - created_at
+      - updated_at
+      additionalProperties: false
+    V2Message:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        thread_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+        content:
+          type: string
+        client_message_id:
+          type: string
+        target_element_ids:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+        sequence_number:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - project_id
+      - thread_id
+      - role
+      - content
+      - sequence_number
+      - created_at
+      additionalProperties: false
+    V2RevisionSource:
+      type: object
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        link_type:
+          type: string
+          enum:
+          - context_source
+          - derived_from
+          default: context_source
+      required:
+      - artifact_id
+      - revision_id
+      additionalProperties: false
+    CreateV2ArtifactRequest:
+      type: object
+      properties:
+        type:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: ^[a-z][a-z0-9_]{0,49}$
+        title:
+          type: string
+          minLength: 1
+          maxLength: 255
+        slug:
+          type: string
+          maxLength: 100
+        document_content:
+          type: string
+          maxLength: 1000000
+          nullable: true
+        graph_nodes:
+          type: array
+          items: {}
+        graph_edges:
+          type: array
+          items: {}
+        frame_data:
+          type: object
+          properties:
+            nodes:
+              type: array
+              items: {}
+            edges:
+              type: array
+              items: {}
+          additionalProperties: true
+        change_summary:
+          type: string
+          maxLength: 1000
+        schema_version:
+          type: integer
+          enum:
+          - 1
+          default: 1
+        trigger_message_id:
+          type: string
+          format: uuid
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2RevisionSource'
+          maxItems: 100
+      required:
+      - type
+      - title
+      additionalProperties: false
+    AppendV2RevisionRequest:
+      type: object
+      properties:
+        expected_revision_id:
+          type: string
+          format: uuid
+        change_summary:
+          type: string
+          maxLength: 1000
+        document_content:
+          type: string
+          maxLength: 1000000
+          nullable: true
+        graph_nodes:
+          type: array
+          items: {}
+        graph_edges:
+          type: array
+          items: {}
+        frame_data:
+          type: object
+          properties:
+            nodes:
+              type: array
+              items: {}
+            edges:
+              type: array
+              items: {}
+          additionalProperties: true
+        schema_version:
+          type: integer
+          enum:
+          - 1
+          default: 1
+        trigger_message_id:
+          type: string
+          format: uuid
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2RevisionSource'
+          maxItems: 100
+      required:
+      - expected_revision_id
+      - change_summary
+      additionalProperties: false
+    RestoreV2RevisionRequest:
+      type: object
+      properties:
+        target_revision_id:
+          type: string
+          format: uuid
+        expected_revision_id:
+          type: string
+          format: uuid
+        change_summary:
+          type: string
+          maxLength: 1000
+      required:
+      - target_revision_id
+      - expected_revision_id
+      additionalProperties: false
+    V2Artifact:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        title:
+          type: string
+        slug:
+          type: string
+        format:
+          type: string
+          enum:
+          - markdown
+          - graph
+          - frame
+        current_version_number:
+          type: integer
+          minimum: 1
+        current_revision_id:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        archived_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - project_id
+      - type
+      - title
+      - slug
+      - format
+      - current_version_number
+      - current_revision_id
+      - created_at
+      - updated_at
+      additionalProperties: false
+    V2Revision:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        artifact_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+          minimum: 1
+        change_summary:
+          type: string
+        content_format:
+          type: string
+          enum:
+          - markdown
+          - graph
+          - frame
+        schema_version:
+          type: integer
+          enum:
+          - 1
+        document_content:
+          type: string
+          nullable: true
+        graph_nodes:
+          type: array
+          items: {}
+        graph_edges:
+          type: array
+          items: {}
+        frame_data:
+          type: object
+          additionalProperties: true
+        trigger_message_id:
+          type: string
+          format: uuid
+        author_id:
+          type: string
+          format: uuid
+        author_type:
+          type: string
+          enum:
+          - ai
+          - manual
+          - restore
+          - sync
+          - migration
+        metadata:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2RevisionSource'
+      required:
+      - id
+      - project_id
+      - artifact_id
+      - version_number
+      - change_summary
+      - content_format
+      - schema_version
+      - author_type
+      - created_at
+      - sources
+      additionalProperties: false
+    V2ArtifactDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+        title:
+          type: string
+        slug:
+          type: string
+        format:
+          type: string
+          enum:
+          - markdown
+          - graph
+          - frame
+        current_version_number:
+          type: integer
+          minimum: 1
+        current_revision_id:
+          type: string
+          format: uuid
+        metadata:
+          type: object
+          additionalProperties: true
+        archived_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        current_revision:
+          $ref: '#/components/schemas/V2Revision'
+      required:
+      - id
+      - project_id
+      - type
+      - title
+      - slug
+      - format
+      - current_version_number
+      - current_revision_id
+      - created_at
+      - updated_at
+      additionalProperties: false
+    V2RevisionSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        artifact_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+          minimum: 1
+        change_summary:
+          type: string
+        content_format:
+          type: string
+          enum:
+          - markdown
+          - graph
+          - frame
+        author_id:
+          type: string
+          format: uuid
+        author_type:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required:
+      - id
+      - artifact_id
+      - version_number
+      - change_summary
+      - content_format
+      - author_type
+      - created_at
+      additionalProperties: false
+    V2ProjectList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2Project'
+        next_cursor:
+          type: string
+          nullable: true
+      required:
+      - items
+      additionalProperties: false
+    V2ThreadList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2Thread'
+        next_cursor:
+          type: string
+          nullable: true
+      required:
+      - items
+      additionalProperties: false
+    V2MessageList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2Message'
+        next_cursor:
+          type: string
+          nullable: true
+      required:
+      - items
+      additionalProperties: false
+    V2ArtifactList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2Artifact'
+        next_cursor:
+          type: string
+          nullable: true
+      required:
+      - items
+      additionalProperties: false
+    V2RevisionList:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2RevisionSummary'
+        next_cursor:
+          type: string
+          nullable: true
+      required:
+      - items
+      additionalProperties: false
+    V2ProjectEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2Project'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2ProjectListEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2ProjectList'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2ThreadEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2Thread'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2ThreadListEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2ThreadList'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2MessageEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2Message'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2MessageListEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2MessageList'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2ArtifactEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2ArtifactDetail'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2ArtifactListEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2ArtifactList'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2RevisionEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2Revision'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2RevisionListEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2RevisionList'
+      required:
+      - status
+      - message
+      - data
+      additionalProperties: false
+    V2ErrorEnvelope:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+          - error
+        message:
+          type: string
+        code:
+          type: string
+        request_id:
+          type: string
+      required:
+      - status
+      - message
+      - code
+      - request_id
+      additionalProperties: false
+    V2ResolveContextRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum: [explicit, project_relevant]
+          default: explicit
+        sources:
+          type: array
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/V2ContextSourceRef'
+        thread_ids:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            format: uuid
+        excluded_artifact_ids:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            format: uuid
+        max_content_bytes:
+          type: integer
+          minimum: 1024
+          maximum: 131072
+          default: 49152
+    V2ContextSourceRef:
+      type: object
+      required: [artifact_id]
+      additionalProperties: false
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+    V2ContextProject:
+      type: object
+      required: [id, title, description]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        description:
+          type: string
+    V2ContextSource:
+      type: object
+      required: [artifact_id, revision_id, version_number, title, type, format, content]
+      additionalProperties: false
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        version_number:
+          type: integer
+        title:
+          type: string
+        type:
+          type: string
+        format:
+          type: string
+          enum: [markdown, graph, frame]
+        content:
+          type: object
+          additionalProperties: true
+          description: Markdown body with markdown key, graph nodes/edges, or existing frame object; interpreted using format.
+    V2ContextMessage:
+      type: object
+      required: [id, thread_id, role, content, sequence_number]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        thread_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+        sequence_number:
+          type: integer
+    V2ContextOmission:
+      type: object
+      required: [reason]
+      additionalProperties: false
+      properties:
+        artifact_id:
+          type: string
+          format: uuid
+        revision_id:
+          type: string
+          format: uuid
+        message_id:
+          type: string
+          format: uuid
+        thread_id:
+          type: string
+          format: uuid
+        reason:
+          type: string
+          enum: [content_budget]
+    V2ContextBudget:
+      type: object
+      required: [max_content_bytes, used_content_bytes]
+      additionalProperties: false
+      properties:
+        max_content_bytes:
+          type: integer
+        used_content_bytes:
+          type: integer
+    V2ContextManifest:
+      type: object
+      required: [schema_version, mode, project, thread_id, sources, messages, omitted, budget, candidate_limit_reached, history_limited_thread_ids, preview_only]
+      additionalProperties: false
+      properties:
+        schema_version:
+          type: integer
+          enum: [1]
+        mode:
+          type: string
+          enum: [explicit, project_relevant]
+        project:
+          $ref: '#/components/schemas/V2ContextProject'
+        thread_id:
+          type: string
+          format: uuid
+        sources:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2ContextSource'
+        messages:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2ContextMessage'
+        omitted:
+          type: array
+          items:
+            $ref: '#/components/schemas/V2ContextOmission'
+        budget:
+          $ref: '#/components/schemas/V2ContextBudget'
+        candidate_limit_reached:
+          type: boolean
+        history_limited_thread_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        preview_only:
+          type: boolean
+    V2ContextEnvelope:
+      type: object
+      required: [status, message, data]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2ContextManifest'
+    V2StartGenerationRequest:
+      type: object
+      description: >-
+        Starts document or diagram generation from a saved user message. The server
+        freezes context revisions and, for a target revision, its base content.
+        Prompts and base graph snapshots are loaded server-side; evidence is selected
+        through the context selectors and lineage is derived from the frozen manifest.
+        Optional mutation requires a graph output and both target revision identifiers.
+        It updates only selected existing elements, preserves the artifact title, and
+        never adds/deletes elements or changes identities, node types, edge endpoints,
+        or sequence numbers. Omit mutation for new artifacts or full revisions.
+      required: [trigger_message_id, output_type]
+      additionalProperties: false
+      properties:
+        trigger_message_id:
+          type: string
+          format: uuid
+        output_type:
+          type: string
+          enum: [brainstorm, prd, erd, flowchart, sequence]
+          description: Brainstorm and PRD produce markdown; ERD, flowchart and sequence produce graph artifacts. Other types are not enabled yet.
+        output_title:
+          type: string
+          maxLength: 255
+        target_artifact_id:
+          type: string
+          format: uuid
+        target_expected_revision_id:
+          type: string
+          format: uuid
+        context:
+          $ref: '#/components/schemas/V2ResolveContextRequest'
+        mutation:
+          $ref: '#/components/schemas/V2DiagramMutation'
+    V2DiagramMutation:
+      type: object
+      additionalProperties: false
+      required: [node_ids, edge_ids]
+      description: >-
+        UPDATE-only scope frozen with the target revision. Both arrays are required,
+        may individually be empty, and together must contain 1..32 unique existing
+        targets (unique within each category). IDs are case-sensitive. Selected node
+        data and selected edge label/cardinality/message_type may change. The server
+        merges a scoped model patch, validates the full graph, and preserves layout
+        and unknown extension properties. An effective change is required. output_title
+        must equal the existing artifact title. Invalid targets are rejected before
+        inference; out-of-scope patches are repaired at most twice, then fail closed.
+      properties:
+        node_ids:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'
+        edge_ids:
+          type: array
+          maxItems: 32
+          uniqueItems: true
+          items:
+            type: string
+            pattern: '^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$'
+    V2GenerationRun:
+      type: object
+      description: >-
+        Durable lifecycle shared by documents and diagrams. A succeeded run points
+        to an atomically committed artifact, revision and assistant message. Private
+        prompt and base content snapshots are never included in the run response.
+      required: [id, project_id, thread_id, trigger_message_id, output_type, output_title, frozen_manifest, status, created_at, updated_at]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        thread_id:
+          type: string
+          format: uuid
+        trigger_message_id:
+          type: string
+          format: uuid
+        output_type:
+          type: string
+          enum: [brainstorm, prd, erd, flowchart, sequence]
+        output_title:
+          type: string
+        target_artifact_id:
+          type: string
+        target_expected_revision_id:
+          type: string
+        mutation:
+          $ref: '#/components/schemas/V2DiagramMutation'
+        frozen_manifest:
+          $ref: '#/components/schemas/V2ContextManifest'
+        status:
+          type: string
+          enum: [queued, running, cancel_requested, succeeded, failed, canceled]
+        error_code:
+          type: string
+        error_message:
+          type: string
+        committed_artifact_id:
+          type: string
+        committed_revision_id:
+          type: string
+        committed_message_id:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+    V2GenerationRunEnvelope:
+      type: object
+      required: [status, message, data]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          example: success
+        message:
+          type: string
+        data:
+          $ref: '#/components/schemas/V2GenerationRun'

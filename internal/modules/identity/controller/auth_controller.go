@@ -20,10 +20,15 @@ type AuthService interface {
 
 type AuthController struct {
 	credentials AuthService
+	browser     *BrowserController
 }
 
-func NewAuthController(credentials AuthService) *AuthController {
-	return &AuthController{credentials: credentials}
+func NewAuthController(credentials AuthService, browser ...*BrowserController) *AuthController {
+	controller := &AuthController{credentials: credentials}
+	if len(browser) > 0 {
+		controller.browser = browser[0]
+	}
+	return controller
 }
 
 func (c *AuthController) Verify(w http.ResponseWriter, r *http.Request) {
@@ -77,5 +82,9 @@ func (c *AuthController) Me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *AuthController) Logout(w http.ResponseWriter, r *http.Request) {
+	if c.browser != nil {
+		c.browser.Logout(w, r)
+		return
+	}
 	httpresponse.RespondJSON(w, http.StatusOK, "Berhasil logout", map[string]bool{"success": true})
 }

@@ -33,6 +33,20 @@ func AuthMiddleware(credentials CredentialFinder) func(http.Handler) http.Handle
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
 			token := strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
+			if strings.HasPrefix(r.URL.Path, "/api/v2/") && r.Method != http.MethodOptions {
+				parts := strings.Fields(authHeader)
+				if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+					httpresponse.RespondV2Error(w, http.StatusUnauthorized, "UNAUTHENTICATED", "Bearer authentication required")
+					return
+				}
+				user, err := credentials.FindByKey(r.Context(), parts[1])
+				if err != nil || user == nil || !user.IsActive || (user.ExpiresAt != nil && !time.Now().Before(*user.ExpiresAt)) {
+					httpresponse.RespondV2Error(w, http.StatusUnauthorized, "UNAUTHENTICATED", "Invalid or expired credentials")
+					return
+				}
+				next.ServeHTTP(w, r.WithContext(authcontext.WithUser(r.Context(), user)))
+				return
+			}
 			if isPublicPath(r.URL.Path, r.Method) {
 				if authHeader != "" {
 					user, err := credentials.FindByKey(r.Context(), token)

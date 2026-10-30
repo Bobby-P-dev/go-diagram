@@ -26,7 +26,7 @@ func TestCORSMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("Localhost origin match", func(t *testing.T) {
+	t.Run("Unlisted localhost origin rejected", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
 		req.Header.Set("Origin", "http://localhost:5173")
 		rec := httptest.NewRecorder()
@@ -35,8 +35,8 @@ func TestCORSMiddleware(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Errorf("expected 200, got %d", rec.Code)
 		}
-		if rec.Header().Get("Access-Control-Allow-Origin") != "http://localhost:5173" {
-			t.Errorf("expected localhost origin allowed, got %s", rec.Header().Get("Access-Control-Allow-Origin"))
+		if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Errorf("expected unlisted localhost origin rejected, got %s", rec.Header().Get("Access-Control-Allow-Origin"))
 		}
 	})
 

@@ -1,10 +1,13 @@
 package llm
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 )
+
+var ErrIncompleteCompletion = errors.New("provider returned an incomplete or blocked completion")
 
 type Config struct {
 	AIProvider       string

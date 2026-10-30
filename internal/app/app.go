@@ -6,16 +6,28 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/Bobby-P-dev/go-diagram.git/internal/integration/contextgateway"
+	"github.com/Bobby-P-dev/go-diagram.git/internal/integration/llmgateway"
 	"github.com/Bobby-P-dev/go-diagram.git/internal/integration/projectgateway"
+	artifactcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/artifact/controller"
+	artifactrepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/artifact/repository"
+	artifactservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/artifact/service"
 	diagramcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/diagram/controller"
 	diagramintegration "github.com/Bobby-P-dev/go-diagram.git/internal/modules/diagram/integration"
 	diagramrepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/diagram/repository"
 	diagramservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/diagram/service"
+	generationcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/generation/controller"
+	generationrepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/generation/repository"
+	generationservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/generation/service"
 	"github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity"
 	"github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/authcontext"
 	identitycontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/controller"
 	identitymiddleware "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/middleware"
+	identityrepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/repository"
 	identityservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/service"
+	productcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/product/controller"
+	productrepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/product/repository"
+	productservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/product/service"
 	sharingcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/sharing/controller"
 	sharerepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/sharing/repository"
 	shareservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/sharing/service"
@@ -34,6 +46,10 @@ import (
 )
 
 func NewHandler(env *platformconfig.EnvConfig, db *sql.DB, redisClient *redis.Client, credentialService identityservice.CredentialService) http.Handler {
+	return NewHandlerWithContext(nil, env, db, redisClient, credentialService)
+}
+
+func NewHandlerWithContext(workerContext context.Context, env *platformconfig.EnvConfig, db *sql.DB, redisClient *redis.Client, credentialService identityservice.CredentialService) http.Handler {
 	projectModel := diagramrepository.NewProjectRepository(db, identity.MasterAdminID)
 	messageModel := diagramrepository.NewMessageRepository(db)
 	versionModel := diagramrepository.NewVersionRepository(db)
@@ -78,7 +94,9 @@ func NewHandler(env *platformconfig.EnvConfig, db *sql.DB, redisClient *redis.Cl
 		return projectService.GetProjectByID(id)
 	})
 	shareController := sharingcontroller.NewShareController(shareService, shareReader, shareLoader)
-	authController := identitycontroller.NewAuthController(credentialService)
+	browserService := identityservice.NewBrowserService(identityrepository.NewBrowserRepository(db), credentialService)
+	browserController := identitycontroller.NewBrowserController(browserService, env.AuthCookieSecure)
+	authController := identitycontroller.NewAuthController(credentialService, browserController)
 	adminController := identitycontroller.NewAdminController(credentialService)
 
 	uiDesignProjects := projectgateway.NewUIDesignProjectGateway(projectModel, messageModel, versionModel)
@@ -129,6 +147,23 @@ func NewHandler(env *platformconfig.EnvConfig, db *sql.DB, redisClient *redis.Cl
 	)
 
 	mux := http.NewServeMux()
+	productController := productcontroller.NewProductController(productservice.NewService(productrepository.NewPostgresRepository(db)))
+	RegisterProductRoutes(mux, productController)
+	artifactController := artifactcontroller.NewArtifactController(artifactservice.NewService(artifactrepository.NewPostgresRepository(db)))
+	RegisterArtifactRoutes(mux, artifactController)
+	resolver := generationservice.NewContextResolver(contextgateway.NewPostgresReader(db))
+	contextController := generationcontroller.NewContextController(resolver)
+	RegisterContextRoutes(mux, contextController)
+	generationClient := llmgateway.New(llmClient)
+	coordinator := generationservice.NewRunCoordinator(
+		generationrepository.NewPostgresRunRepository(db), resolver,
+		generationservice.NewDocumentEngine(generationClient),
+		generationservice.NewDiagramEngine(generationClient),
+	)
+	RegisterGenerationRoutes(mux, generationcontroller.NewRunController(coordinator))
+	if workerContext != nil {
+		go coordinator.Run(workerContext)
+	}
 	RegisterRoutes(
 		mux,
 		projectController,
@@ -142,7 +177,8 @@ func NewHandler(env *platformconfig.EnvConfig, db *sql.DB, redisClient *redis.Cl
 	)
 
 	var handler http.Handler = mux
-	handler = identitymiddleware.AuthMiddleware(credentialService)(handler)
+	RegisterBrowserAuthRoutes(mux, browserController)
+	handler = identitymiddleware.BrowserMiddleware(browserService, credentialService, env.CORSAllowedOrigins, env.LegacyCredentialLogin)(handler)
 	handler = platformmiddleware.LoggerMiddleware(handler)
 	handler = platformmiddleware.CORSMiddleware(handler, env.CORSAllowedOrigins)
 

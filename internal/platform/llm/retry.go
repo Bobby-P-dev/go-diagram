@@ -1,11 +1,26 @@
 package llm
 
 import (
+	"context"
 	"math/rand"
 	"net/http"
 	"strings"
 	"time"
 )
+
+func waitForRetry(ctx context.Context, attempt int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	timer := time.NewTimer(retryBackoff(attempt))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 // retryableHTTPStatus reports whether an upstream status code is worth re-trying.
 // Retry transient/router overloads (429 rate-limit, 502 Bad Gateway, 503/504, Cloudflare 520-524/529 proxy issues) but

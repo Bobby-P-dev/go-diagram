@@ -11,10 +11,11 @@ func TestCORSCharacterization(test *testing.T) {
 		name, origins, origin, expected string
 	}{
 		{"whitespace list", " https://first.test, https://second.test ", "https://second.test", "https://second.test"},
-		{"wildcard echoes", "*", "https://arbitrary.test", "https://arbitrary.test"},
+		{"wildcard not allowed with credentials", "*", "https://arbitrary.test", ""},
 		{"empty origin", "*", "", ""},
-		{"loopback legacy exception", "https://app.test", "http://127.0.0.1:5173", "http://127.0.0.1:5173"},
-		{"localhost empty allowlist", "", "http://localhost:5173", "http://localhost:5173"},
+		{"loopback requires explicit allowlist", "https://app.test", "http://127.0.0.1:5173", ""},
+		{"localhost empty allowlist", "", "http://localhost:5173", ""},
+		{"localhost explicitly allowed", "http://localhost:5173", "http://localhost:5173", "http://localhost:5173"},
 		{"https localhost not implicit", "https://app.test", "https://localhost:5173", ""},
 		{"near match not allowed", "https://app.test", "https://app.test.attacker.test", ""},
 	} {
@@ -33,7 +34,7 @@ func TestCORSCharacterization(test *testing.T) {
 			}
 			for name, expected := range map[string]string{
 				"Access-Control-Allow-Methods":     "GET, POST, PUT, DELETE, PATCH, OPTIONS",
-				"Access-Control-Allow-Headers":     "Content-Type, Authorization, X-Requested-With, X-Internal-Service-Key",
+				"Access-Control-Allow-Headers":     "Content-Type, Authorization, X-CSRF-Token, X-Requested-With, X-Internal-Service-Key",
 				"Access-Control-Allow-Credentials": "true",
 				"Access-Control-Max-Age":           "86400",
 			} {

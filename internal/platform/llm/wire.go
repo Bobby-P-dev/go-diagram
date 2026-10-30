@@ -46,8 +46,9 @@ type anthropicRequest struct {
 }
 
 type anthropicResponse struct {
-	Content []anthropicContent `json:"content"`
-	Error   *anthropicError    `json:"error,omitempty"`
+	StopReason string             `json:"stop_reason"`
+	Content    []anthropicContent `json:"content"`
+	Error      *anthropicError    `json:"error,omitempty"`
 }
 
 type anthropicContent struct {

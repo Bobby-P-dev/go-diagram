@@ -30,6 +30,8 @@ type EnvConfig struct {
 	RedisURL                string
 	InternalServiceKey      string
 	MasterAdminKey          string
+	AuthCookieSecure        bool
+	LegacyCredentialLogin   bool
 	OrchestrationServiceURL string
 }
 
@@ -54,7 +56,7 @@ func LoadEnv() *EnvConfig {
 		AnthropicAPIKey:         getEnv("ANTHROPIC_API_KEY", ""),
 		AnthropicModel:          getEnv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
 		AnthropicBaseURL:        getEnv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1/messages"),
-		CORSAllowedOrigins:      getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000"),
+		CORSAllowedOrigins:      getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:5174,http://127.0.0.1:5173,http://127.0.0.1:5174"),
 		OpenAIAPIKey:            getEnvAny([]string{"OPENAI_API_KEY", "OPEN_AI_API_KEY", "AI_API_KEY", "MODEL_API_KEY", "META_API_KEY"}, ""),
 		OpenAIMBaseURL:          getEnvAny([]string{"OPENAI_BASE_URL", "OPEN_AI_BASE_URL", "AI_BASE_URL", "META_BASE_URL"}, "http://localhost:20128/v1"),
 		OpenAIModel:             getEnvAny([]string{"OPENAI_MODEL", "OPEN_AI_MODEL", "AI_MODEL", "META_MODEL"}, "cx/gpt-6-luna"),
@@ -62,6 +64,8 @@ func LoadEnv() *EnvConfig {
 		RedisURL:                getEnv("REDIS_URL", "redis://localhost:6379/0"),
 		InternalServiceKey:      getEnv("INTERNAL_SERVICE_KEY", ""),
 		MasterAdminKey:          getEnv("MASTER_ADMIN_KEY", ""),
+		AuthCookieSecure:        getEnv("AUTH_COOKIE_SECURE", "true") != "false",
+		LegacyCredentialLogin:   getEnv("AUTH_LEGACY_CREDENTIALS", "false") == "true",
 		OrchestrationServiceURL: getEnv("ORCHESTRATION_SERVICE_URL", "http://localhost:8000"),
 	}
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Bobby-P-dev/go-diagram.git/internal/app"
+	"github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity"
 	identityrepository "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/repository"
 	identityservice "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/service"
 	platformconfig "github.com/Bobby-P-dev/go-diagram.git/internal/platform/config"
@@ -37,7 +38,7 @@ func main() {
 	defer platformdatabase.Close(db)
 
 	if err := platformdatabase.RunMigrations(context.Background(), db); err != nil {
-		log.Printf("Warning during automatic database migration: %v", err)
+		log.Fatalf("Database migration failed: %v", err)
 	}
 
 	redisClient, err := platformredis.Connect(context.Background(), env.RedisURL)
@@ -51,11 +52,23 @@ func main() {
 	if err := credentialService.MigrateCredentialKeys(context.Background()); err != nil {
 		log.Fatalf("Credential key migration failed: %v", err)
 	}
-	if err := credentialService.EnsureMasterAdmin(context.Background(), env.MasterAdminKey); err != nil {
+	bootstrapKey := env.MasterAdminKey
+	if bootstrapKey == "" && !env.LegacyCredentialLogin {
+		bootstrapKey, err = identity.GenerateRandomKey()
+		if err != nil {
+			log.Fatalf("Identity bootstrap failed: %v", err)
+		}
+	}
+	if err := credentialService.EnsureMasterAdmin(context.Background(), bootstrapKey); err != nil {
 		log.Fatalf("Master admin bootstrap failed: %v", err)
 	}
+	if err := platformdatabase.BackfillConnectedWorkspace(context.Background(), db); err != nil {
+		log.Fatalf("Connected workspace backfill failed: %v", err)
+	}
 
-	handler := app.NewHandler(env, db, redisClient, credentialService)
+	workerContext, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
+	handler := app.NewHandlerWithContext(workerContext, env, db, redisClient, credentialService)
 
 	server := &http.Server{
 		Addr:         ":" + env.AppPort,
@@ -77,6 +90,7 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down server...")
+	stopWorkers()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

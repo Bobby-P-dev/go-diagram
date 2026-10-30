@@ -14,15 +14,20 @@ func CORSMiddleware(next http.Handler, allowedOriginsHeader string) http.Handler
 		if origin != "" {
 			for _, allowed := range allowedOrigins {
 				trimmed := strings.TrimSpace(allowed)
-				if trimmed == "*" || trimmed == origin || strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:") {
+				if trimmed == origin {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 					break
 				}
 			}
 		}
 
+		w.Header().Add("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, X-Internal-Service-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token, X-Requested-With, X-Internal-Service-Key")
+		if strings.HasPrefix(r.URL.Path, "/api/v2/") {
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-CSRF-Token, Idempotency-Key, X-Requested-With")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
+		}
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Max-Age", "86400")
 

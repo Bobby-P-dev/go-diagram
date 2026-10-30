@@ -1,16 +1,55 @@
 package app
 
 import (
+	artifactcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/artifact/controller"
+	generationcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/generation/controller"
 	"net/http"
 
 	diagramcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/diagram/controller"
 	identitycontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/controller"
 	identitymiddleware "github.com/Bobby-P-dev/go-diagram.git/internal/modules/identity/middleware"
+	productcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/product/controller"
 	sharingcontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/sharing/controller"
 	uidesigncontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/uidesign/controller"
 	workspacecontroller "github.com/Bobby-P-dev/go-diagram.git/internal/modules/workspace/controller"
 	platformmiddleware "github.com/Bobby-P-dev/go-diagram.git/internal/platform/middleware"
 )
+
+func RegisterContextRoutes(mux *http.ServeMux, controller *generationcontroller.ContextController) {
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/threads/{threadId}/context/resolve", controller.Resolve)
+}
+
+func RegisterGenerationRoutes(mux *http.ServeMux, controller *generationcontroller.RunController) {
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/threads/{threadId}/generations", controller.Start)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/generations/{runId}", controller.Get)
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/generations/{runId}/cancel", controller.Cancel)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/generations/{runId}/events", controller.Events)
+}
+
+func RegisterArtifactRoutes(mux *http.ServeMux, controller *artifactcontroller.ArtifactController) {
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/artifacts", controller.CreateArtifact)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/artifacts", controller.ListArtifacts)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/artifacts/{artifactId}", controller.GetArtifact)
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/artifacts/{artifactId}/revisions", controller.AppendRevision)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/artifacts/{artifactId}/revisions", controller.ListRevisions)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/artifacts/{artifactId}/revisions/{revisionId}", controller.GetRevision)
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/artifacts/{artifactId}/restores", controller.RestoreRevision)
+}
+
+func RegisterProductRoutes(mux *http.ServeMux, controller *productcontroller.ProductController) {
+	mux.HandleFunc("POST /api/v2/projects", controller.CreateProject)
+	mux.HandleFunc("GET /api/v2/projects", controller.ListProjects)
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/threads", controller.CreateThread)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/threads", controller.ListThreads)
+	mux.HandleFunc("POST /api/v2/projects/{projectId}/threads/{threadId}/messages", controller.PostMessage)
+	mux.HandleFunc("GET /api/v2/projects/{projectId}/threads/{threadId}/messages", controller.ListMessages)
+}
+
+func RegisterBrowserAuthRoutes(mux *http.ServeMux, controller *identitycontroller.BrowserController) {
+	mux.HandleFunc("POST /api/auth/login", controller.Login)
+	mux.HandleFunc("GET /api/auth/session", controller.Session)
+	mux.HandleFunc("DELETE /api/auth/session", controller.Logout)
+}
 
 func RegisterRoutes(
 	mux *http.ServeMux,
